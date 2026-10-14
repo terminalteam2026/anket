@@ -452,44 +452,6 @@ h2:focus {
   font-weight: 600;
 }
 
-/* Katilimci bilgisi: tek secimli gruplar (yerel radyo dugmeleri) */
-.choice-group {
-  margin: 0;
-  padding: 12px 16px 8px;
-  border: 0;
-  border-radius: 16px;
-  background: var(--surface);
-  min-width: 0;
-}
-
-.choice-group > legend {
-  float: left;
-  width: 100%;
-  margin-bottom: 4px;
-  padding: 0;
-}
-
-.choice-group > legend + * {
-  clear: left;
-}
-
-.choice {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  min-height: 44px;
-  padding: 4px 0;
-  cursor: pointer;
-}
-
-.radio {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  margin: 0;
-  accent-color: var(--primary);
-}
-
 /* Diyalog */
 .dialog {
   max-width: min(30rem, calc(100vw - 32px));
@@ -1466,13 +1428,8 @@ h2:focus {
     consentStarting: 'Anket hazırlanıyor…',
     // katilimci yonergesi (TASARIM-v2 §4, web: "ya da söyle" yok); vurgulu kisim ayrica isaretlenir
     guidelineTitle: 'Nasıl yanıtlayacaksın?',
-    guideline: 'Her soruda, asistandan o işi isteyebileceğin üç farklı cümle yaz. Gerçekte nasıl söylüyorsan öyle söyle; aklına gelen farklı söyleyişleri dene. "Hey asistan" gibi bir uyandırma sözü gerekmez. Gerçek telefon numarası, adres ya da başka kişisel bilgi yazma.',
-    guidelineEmphasis: 'üç farklı cümle',
-    // katilimci bilgisi (TASARIM-v2 §3)
-    demoTitle: 'Katılımcı bilgisi',
-    demoIntro: 'Bu üç soru isteğe bağlıdır. Yanıtların kimlerden geldiğini genel olarak görmemize yardım eder; adın ya da seni tanıtan bir bilgi istenmez. İstemediğin soruyu boş bırakabilir ya da "Belirtmek istemiyorum"u seçebilirsin.',
-    demoNone: 'Belirtmek istemiyorum',
-    demoContinue: 'Devam',
+    guideline: 'Her soruda, asistandan o işi isteyebileceğin aklına gelen farklı cümleleri (en çok üç) yaz. Gerçekte nasıl söylüyorsan öyle söyle; aklına gelen farklı söyleyişleri dene. "Hey asistan" gibi bir uyandırma sözü gerekmez. Gerçek telefon numarası, adres ya da başka kişisel bilgi yazma.',
+    guidelineEmphasis: 'farklı cümleleri (en çok üç)',
     questionReminder: 'Aynı isteği üç farklı biçimde yaz.',
     questionAnswersLabel: 'Yanıtların',
     questionPlaceholder: 'Yanıtını buraya yaz',
@@ -1482,7 +1439,7 @@ h2:focus {
     questionLater: 'Daha Sonra Devam Et',
     questionSaveError: 'Kaydedilemedi. Tekrar dene.',
     questionRetry: 'Tekrar dene',
-    questionNoticeEmpty: 'Üç alana da birer cümle yaz ya da soruyu geç.',
+    questionNoticeEmpty: 'En az bir alana bir cümle yaz ya da soruyu geç.',
     questionDuplicate: 'Aynı cümleyi iki kez yazdın; farklı bir söyleyiş dene.',
     questionTooLong: 'Yanıt en çok 2000 karakter olabilir. Lütfen kısalt.',
     questionStale: 'Bu soru başka bir pencerede yanıtlandı; ekran güncellendi.',
@@ -2170,8 +2127,8 @@ h2:focus {
     }
 
     /**
-     * Oturumu baslatir (onay ve katilimci bilgisi ekranindan sonra, tek setItem). o: {code, consentTime,
-     * demographics: {age_range, region, assistant_usage}}. Yalniz ana oturum (TASARIM-v2 §1): etkin sorusu olan butun
+     * Oturumu baslatir (onaydan hemen sonra, tek setItem). o: {code, consentTime}. Katilimci bilgisi sorulmaz;
+     * age_range/region/assistant_usage null yazilir (alicilar alanlari kabul etmeye devam eder). Yalniz ana oturum (TASARIM-v2 §1): etkin sorusu olan butun
      * fonksiyonlar rastgele sirada, planMixed(fonksiyon sayisi, 0); kapsam disi oturumu katilimci akisindan kalkti.
      * Plan, alicilarin kuraliyla (PlanRules) da denetlenir.
      */
@@ -2179,7 +2136,8 @@ h2:focus {
       if (o.kind !== undefined && o.kind !== 'main') return { ok: false, reason: 'generic' };
       var kind = 'main';
       var code = o.code ? core.answerPolicy.confirmedFrom(String(o.code)).slice(0, MAX_CODE_LENGTH) : '';
-      var demo = cleanDemographics(o.demographics);
+      // katilimci bilgisi adimi kaldirildi (kullanici istegi 14 Ekim): alanlar her zaman null gonderilir
+      var demo = cleanDemographics(null);
       reload();
       var seen = seenQuestionIds(code === '' ? null : code);
       var plan;
@@ -2278,28 +2236,33 @@ h2:focus {
     }
 
     /**
-     * Uc yanitin denetimi (TASARIM-v2 §2): hepsi anlamli, her biri en cok 2000 karakter, ikisi ayni degil
-     * (AnswerRules.isDuplicateAnswer). Donus: null (gecerli) | 'empty' | 'too_long' | 'duplicate'.
+     * Yanit alanlarindan kaydedilecek metinler (TASARIM-v2 §2, kullanici istegi 14 Ekim): dolu (anlamli) alanlar alan
+     * sirasiyla ve bosluksuz sikistirilarak (1. ve 3. dolu -> answer_index 0 ve 1). En az bir dolu alan gerekir; her biri
+     * en cok 2000 karakter; ikisi ayni olamaz (AnswerRules.isDuplicateAnswer).
+     * Donus: {texts: [...]} | {problem: 'empty' | 'too_long' | 'duplicate'}.
      */
-    function answersProblem(texts) {
-      if (!Array.isArray(texts) || texts.length !== ANSWERS_PER_QUESTION) return 'empty';
+    function filledAnswers(texts) {
+      if (!Array.isArray(texts) || texts.length > ANSWERS_PER_QUESTION) return { problem: 'empty' };
+      var filled = [];
       var confirmed = [];
       for (var i = 0; i < texts.length; i++) {
         var text = String(texts[i] === undefined || texts[i] === null ? '' : texts[i]);
-        if (!core.answerPolicy.isMeaningful(text)) return 'empty';
+        if (!core.answerPolicy.isMeaningful(text)) continue; // bos alan atlanir
         // alici 2000 karakterden uzun metni reddeder (text_too_long); UTF-16 uzunlugu kod noktasi sayisindan kucuk olamaz
-        if (text.length > MAX_ANSWER_LENGTH) return 'too_long';
+        if (text.length > MAX_ANSWER_LENGTH) return { problem: 'too_long' };
         var c = core.answerPolicy.confirmedFrom(text);
-        if (core.answerRules.isDuplicateAnswer(c, confirmed)) return 'duplicate';
+        if (core.answerRules.isDuplicateAnswer(c, confirmed)) return { problem: 'duplicate' };
         confirmed.push(c);
+        filled.push(text);
       }
-      return null;
+      return filled.length === 0 ? { problem: 'empty' } : { texts: filled };
     }
 
     /**
-     * action 'answer' (o.texts: uc yanit) | 'skip'. o.position / o.questionId: ekranda gosterilen soru (Android'deki
+     * action 'answer' (o.texts: en cok uc alanin metni) | 'skip'. o.position / o.questionId: ekranda gosterilen soru (Android'deki
      * SubmitCommand gibi); oturumun siradaki sorusu bundan farkliysa (baska sekme araya girdi) yazilmaz: 'stale'.
-     * Yanit: uc satir (answer_index 0, 1, 2) tek setItem'la; 0. satir responses[pos], 1-2 responses[pos].extras.
+     * Yanit: dolu alan basina bir satir (answer_index 0..2, sikistirilmis) tek setItem'la; 0. satir responses[pos],
+     * digerleri responses[pos].extras (0-2 oge).
      * Gecme: tek satir (0, skipped), yazilmis metin saklanmaz. clientEventId (konum, satir) basina sabit, attempt_count
      * her denemede artar (K-15..K-18).
      * Donus: {ok:true, completed, restDue, duplicate:false} |
@@ -2318,10 +2281,11 @@ h2:focus {
         return { ok: false, reason: 'stale' };
       }
       var skipped = o.action === 'skip';
-      var texts = skipped ? [''] : (Array.isArray(o.texts) ? o.texts.map(function (x) { return String(x === undefined || x === null ? '' : x); }) : null);
+      var texts = [''];
       if (!skipped) {
-        var problem = answersProblem(texts);
-        if (problem !== null) return { ok: false, reason: problem };
+        var answers = filledAnswers(o.texts);
+        if (answers.problem) return { ok: false, reason: answers.problem };
+        texts = answers.texts;
       }
 
       var t = now();
@@ -2361,7 +2325,7 @@ h2:focus {
         asr_attempts: [],
         quality_flags: rows[0].quality_flags,
       };
-      if (!skipped) {
+      if (rows.length > 1) {
         // depo bicimi (TASARIM-v2 §6): 1. ve 2. yanit; her birinin kendi kimlikleri ve bayraklari
         response.extras = rows.slice(1).map(function (r) {
           return {
@@ -3124,65 +3088,25 @@ h2:focus {
         h('p', { id: 'code-hint', class: 'hint' }, T.consentCodeHint)));
 
       var check = h('input', { id: 'consent-checkbox', type: 'checkbox', class: 'check' });
+      var errorBox = h('div', { class: 'consent-error', role: 'alert' });
       var accept = button(T.consentAccept, 'primary', onAccept, { id: 'consent-accept', disabled: true });
       var cancel = button(T.consentCancel, 'outline', function () { renderStart(); }, { id: 'consent-cancel' });
       check.addEventListener('change', function () { accept.disabled = !check.checked; });
       main.appendChild(h('label', { class: 'check-row', for: 'consent-checkbox' }, check, h('span', {}, T.consentCheckbox)));
+      main.appendChild(errorBox);
       main.appendChild(h('div', { class: 'actions' }, accept, cancel));
 
-      function onAccept() {
-        if (!check.checked) return;
-        // onay zamani simdi; oturum katilimci bilgisi ekranindan sonra (tek kayitla) baslar
-        renderDemographics({ code: codeInput.value, consentTime: Date.now() });
-      }
-      show(T.consentTitle, main);
-    }
-
-    /**
-     * Istege bagli katilimci bilgisi (TASARIM-v2 §3): onaydan sonra, ilk sorudan once. Uc tek secimli grup (yerel radyo
-     * dugmeleri: Tab ile gruplar arasi, oklarla secim); "Belirtmek istemiyorum" ya da secimsiz grup null. "Devam" hep acik.
-     * Oturum burada baslar; bilgiler oturuma baglidir, sonradan degistirilmez.
-     */
-    function renderDemographics(ctx) {
-      screen = 'demographics';
-      var main = h('main', { class: 'screen' });
-      main.appendChild(h('h1', { class: 'title' }, T.demoTitle));
-      main.appendChild(h('p', { class: 'note' }, T.demoIntro));
-      core.demographics.FIELDS.forEach(function (f) {
-        var group = h('fieldset', { class: 'choice-group', id: 'demo-' + f.field });
-        group.appendChild(h('legend', { class: 'label' }, f.label));
-        f.options.concat([{ value: '', label: T.demoNone }]).forEach(function (o, i) {
-          var id = 'demo-' + f.field + '-' + i;
-          var input = h('input', { type: 'radio', class: 'radio', name: 'demo-' + f.field, id: id, value: o.value });
-          group.appendChild(h('label', { class: 'choice', for: id }, input, h('span', {}, o.label)));
-        });
-        main.appendChild(group);
-      });
-      var errorBox = h('div', { class: 'consent-error', role: 'alert' });
-      var cont = button(T.demoContinue, 'primary', onContinue, { id: 'demo-continue' });
-      var cancel = button(T.consentCancel, 'outline', function () { renderStart(); }, { id: 'demo-cancel' });
-      main.appendChild(errorBox);
-      main.appendChild(h('div', { class: 'actions' }, cont, cancel));
-
-      function chosen() {
-        var out = {};
-        core.demographics.FIELDS.forEach(function (f) {
-          var c = main.querySelector('input[name="demo-' + f.field + '"]:checked');
-          out[f.field] = c && c.value !== '' ? c.value : null;
-        });
-        return out;
-      }
-
+      // onaydan sonra dogrudan ilk soru (katilimci bilgisi adimi kaldirildi)
       var starting = false;
-      function onContinue() {
-        if (starting) return;
+      function onAccept() {
+        if (!check.checked || starting) return;
         starting = true;
-        cont.disabled = true;
+        accept.disabled = true;
         cancel.disabled = true;
-        cont.textContent = T.consentStarting;
+        accept.textContent = T.consentStarting;
         var res;
         try {
-          res = engine.startSession({ code: ctx.code, consentTime: ctx.consentTime, demographics: chosen() });
+          res = engine.startSession({ code: codeInput.value, consentTime: Date.now() });
         } catch (e) {
           res = { ok: false, reason: 'generic' };
         }
@@ -3191,18 +3115,19 @@ h2:focus {
           return;
         }
         starting = false;
-        cont.textContent = T.demoContinue;
-        cont.disabled = false;
+        accept.textContent = T.consentAccept;
+        accept.disabled = !check.checked;
         cancel.disabled = false;
         errorBox.textContent = res.reason === 'selection' ? T.consentErrorSelection
           : res.reason === 'storage' ? T.consentErrorStorage : T.consentErrorGeneric;
       }
-      show(T.demoTitle, main);
+      show(T.consentTitle, main);
     }
 
     /**
      * Soru ekrani (TASARIM-v2 §2): uc yanit alani birlikte ("1.", "2.", "3."), ustte "Aynı isteği üç farklı biçimde
-     * yaz.". "Yanıtı Kaydet / Sonraki Soru" yalniz ucu de anlamliyken etkin; ayni cumle iki alanda varsa kayit yok.
+     * yaz.". "Yanıtı Kaydet / Sonraki Soru" en az bir alan doluyken etkin; dolu alanlar sirasiyla, bosluksuz kaydedilir;
+     * ayni cumle iki alanda varsa kayit yok.
      * "Soruyu Geç" her zaman var (yazilan metin kaydedilmez). Son soru bitince "Son bir soru" (oneriler) ekrani.
      */
     function renderQuestion(sid, opts) {
@@ -3265,14 +3190,11 @@ h2:focus {
       function texts() {
         return areas.map(function (a) { return a.value; });
       }
-      function allMeaningful() {
-        return areas.every(function (a) { return core.answerPolicy.isMeaningful(a.value); });
-      }
       function anyMeaningful() {
         return areas.some(function (a) { return core.answerPolicy.isMeaningful(a.value); });
       }
       function refresh() {
-        submitBtn.disabled = saving || !allMeaningful();
+        submitBtn.disabled = saving || !anyMeaningful();
       }
       areas.forEach(function (a, i) {
         a.addEventListener('input', function () {
