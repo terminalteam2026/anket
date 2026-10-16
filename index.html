@@ -415,22 +415,27 @@ h2:focus {
   width: 2.25rem;
 }
 
-.guideline {
+/* Nasil cevaplayacaksin: ornek kutusu; onay: kisa madde listesi */
+.example {
   background: var(--info-bg);
 }
 
-/* Onay */
-.consent-section > * + * {
-  margin-top: 4px;
-}
-
-.consent-h {
+.example-list {
   margin: 0;
-  font-size: 1.0625rem;
-  font-weight: 600;
-  color: var(--primary);
+  padding-left: 1.5rem;
+  font-weight: 500;
 }
 
+.consent-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.consent-list > li + li {
+  margin-top: 6px;
+}
+
+/* Onay */
 .check-row {
   display: flex;
   gap: 12px;
@@ -1426,11 +1431,19 @@ h2:focus {
     consentErrorGeneric: 'Anket başlatılamadı. Lütfen tekrar dene.',
     consentErrorStorage: 'Anket başlatılamadı: tarayıcı veri kaydetmeye izin vermiyor.',
     consentStarting: 'Anket hazırlanıyor…',
-    // katilimci yonergesi (TASARIM-v2 §4, web: "ya da söyle" yok); vurgulu kisim ayrica isaretlenir
-    guidelineTitle: 'Nasıl yanıtlayacaksın?',
-    guideline: 'Her soruda, asistandan o işi isteyebileceğin aklına gelen farklı cümleleri (en çok üç) yaz. Gerçekte nasıl söylüyorsan öyle söyle; aklına gelen farklı söyleyişleri dene. "Hey asistan" gibi bir uyandırma sözü gerekmez. Gerçek telefon numarası, adres ya da başka kişisel bilgi yazma.',
-    guidelineEmphasis: 'farklı cümleleri (en çok üç)',
-    questionReminder: 'Aynı isteği üç farklı biçimde yaz.',
+    // onay ekrani (kisa) ve "Nasıl cevaplayacaksın?" sayfasi (kullanici istegi 16 Ekim)
+    consentPurpose: 'Sesli asistanların günlük dili daha iyi anlaması için örnek komutlar topluyoruz.',
+    howToTitle: 'Nasıl cevaplayacaksın?',
+    howToText: [
+      'Her soruda telefonundaki sesli asistandan bir iş isteyeceksin. Asistana gerçekte nasıl söylüyorsan öyle yaz.',
+      'Aynı isteği farklı biçimlerde söyleyebilirsin; her soruda üç cevap alanı var, aklına gelen farklı cümleleri yaz.',
+    ],
+    howToExampleTitle: 'Örnek: hesap makinesini açmak istesen',
+    howToExample: ['Hesap makinesini aç', 'Bana hesap makinesi lazım', 'Hesap makinesi uygulamasını başlat'],
+    howToExampleNote: 'Sorularda da böyle farklı cümleler kur. Bunlar yalnızca örnek; kendi söyleyişini yaz.',
+    howToNote: '"Hey asistan" gibi bir uyandırma sözü gerekmez. Gerçek telefon numarası ya da kişisel bilgi yazma.',
+    howToStart: 'Ankete başla',
+    questionReminder: 'Bu, sesli asistana vereceğin bir komut; ona söyler gibi yaz.',
     questionAnswersLabel: 'Yanıtların',
     questionPlaceholder: 'Yanıtını buraya yaz',
     questionSubmit: 'Yanıtı Kaydet / Sonraki Soru',
@@ -1736,21 +1749,21 @@ h2:focus {
     return { kind: 'restart' };
   }
 
-  /** Onay metni (TASARIM §13, sesli kisimlar cikarildi). [{h, p: [..]}] */
-  function consentSections(config, total) {
+  /**
+   * Kisa onay metni (kullanici istegi 16 Ekim: "çok uzun"): amac cumlesi T.consentPurpose ve bes madde
+   * [{label, text}]. [belirlenmedi] yer tutuculari yapilandirmadan doldurulur.
+   */
+  function consentItems(config) {
     var c = config.consent || {};
-    var sendInfo = config.send && config.send.type !== 'none'
-      ? 'Anketi bitirince "Gönder"e basarsan yanıtların internet üzerinden araştırmacının belirlediği adrese iletilir. "Gönder"e basmadan hiçbir şey gönderilmez; istersen yanıtlarını bir dosyaya kaydedip kendin de iletebilirsin.'
-      : 'Yanıtların yalnızca bu bilgisayarda, tarayıcının yerel deposunda saklanır. Bunları "Dosyaya kaydet" ile bir dosyaya kaydedip araştırmacıya kendin iletebilirsin.';
+    var send = config.send && config.send.type !== 'none'
+      ? 'Bitirince "Gönder"e bastığında yanıtların araştırmacıya iletilir; basmadan hiçbir şey gönderilmez.'
+      : 'Yanıtların bu bilgisayarda kalır; bitirince "Dosyaya kaydet" ile araştırmacıya iletirsin.';
     return [
-      { h: 'Bu anket ne için?', p: ['Sesli asistanların günlük dildeki komutları daha iyi anlaması için örnek cümleler topluyoruz. Her ekranda bir durum göreceksin; o durumda sesli asistanına ne söyleyeceğini yazarak yanıtlayacaksın. Doğru ya da yanlış cevap yok; kendi doğal söyleyişini merak ediyoruz.'] },
-      { h: 'Ne kaydediliyor?', p: ['Yazdığın metin, sorunun kimliği, yanıt zamanı ve saat dilimi. Adın, telefon numaran, cihaz ya da reklam kimliğin kaydedilmez.'] },
-      { h: 'Kişisel bilgi', p: ['Yanıtlarında gerçek kişi adı ya da telefon numarası kullanmak zorunda değilsin; uydurma bir ad ya da numara yazabilirsin.'] },
-      { h: 'Nasıl kullanılacak?', p: ['Yanıtlar sesli asistanın geliştirilmesinde eğitim ve test verisi olarak kullanılacak. Paylaşım biçimi: ' + placeholder(c.sharing) + '.'] },
-      { h: 'Yanıtların gönderilmesi', p: [sendInfo] },
-      { h: 'Veri sorumlusu ve iletişim', p: [placeholder(c.controller), 'İletişim: ' + placeholder(c.contact)] },
-      { h: 'Saklama süresi', p: [placeholder(c.retention)] },
-      { h: 'Gönüllülük', p: ['Katılım gönüllüdür. İstediğin soruyu geçebilir, anketi istediğin an bırakabilir ya da daha sonra kaldığın yerden sürdürebilirsin. Yanıtlarının silinmesini istersen araştırmacıya katılımcı kodunu ya da anket tarihini bildirmen yeterli.'] },
+      { label: 'Kaydedilen', text: 'Yazdığın cümleler, soru ve zaman bilgisi. Adın, telefon numaran ya da cihaz kimliğin kaydedilmez.' },
+      { label: 'Gönderim', text: send },
+      { label: 'Kullanım', text: 'Sesli asistanın eğitimi ve testi. Paylaşım: ' + placeholder(c.sharing) + '.' },
+      { label: 'Veri sorumlusu', text: placeholder(c.controller) + ' (iletişim: ' + placeholder(c.contact) + '). Saklama: ' + placeholder(c.retention) + '.' },
+      { label: 'Katılım gönüllü', text: 'istediğin soruyu geçebilir, istediğin an bırakabilirsin.' },
     ];
   }
 
@@ -3056,27 +3069,17 @@ h2:focus {
       }
     }
 
-    /** Katilimci yonergesi karti (onay ekrani, TASARIM-v2 §4); "gerçekte ne söyleyeceksen" vurgulu. */
-    function guidelineCard() {
-      var parts = T.guideline.split(T.guidelineEmphasis);
-      return h('section', { class: 'card guideline', id: 'guideline', 'aria-labelledby': 'guideline-title' },
-        h('h2', { id: 'guideline-title', class: 'card-title' }, T.guidelineTitle),
-        h('p', {}, parts[0], h('strong', {}, T.guidelineEmphasis), parts.slice(1).join(T.guidelineEmphasis)));
-    }
-
     function renderConsent() {
       screen = 'consent';
       startNotice = null;
       var total = engine.plannedTotal();
       var main = h('main', { class: 'screen' });
       main.appendChild(h('h1', { class: 'title' }, T.consentTitle));
-      main.appendChild(guidelineCard());
-      consentSections(config, total).forEach(function (sec) {
-        main.appendChild(h('section', { class: 'consent-section' },
-          h('h2', { class: 'consent-h' }, sec.h),
-          sec.p.map(function (para) { return h('p', {}, para); })));
-      });
-      main.appendChild(h('p', { class: 'note' }, 'Anket ' + total + ' sorudan oluşuyor; istediğin an ara verip daha sonra kaldığın yerden sürdürebilirsin.'));
+      main.appendChild(h('p', { class: 'lead', id: 'consent-purpose' }, T.consentPurpose));
+      main.appendChild(h('ul', { class: 'consent-list', id: 'consent-list' }, consentItems(config).map(function (it) {
+        return h('li', {}, h('strong', {}, it.label + ': '), it.text);
+      })));
+      main.appendChild(h('p', { class: 'note' }, 'Anket ' + total + ' sorudan oluşuyor; istediğin an ara verip sonra kaldığın yerden sürdürebilirsin.'));
 
       var codeInput = h('input', {
         id: 'participant-code', type: 'text', maxlength: MAX_CODE_LENGTH, autocomplete: 'off',
@@ -3111,7 +3114,7 @@ h2:focus {
           res = { ok: false, reason: 'generic' };
         }
         if (res.ok) {
-          renderQuestion(res.sessionId);
+          renderHowTo(res.sessionId); // yalniz yeni oturumda; surdurme dogrudan soruya gider
           return;
         }
         starting = false;
@@ -3125,8 +3128,27 @@ h2:focus {
     }
 
     /**
-     * Soru ekrani (TASARIM-v2 §2): uc yanit alani birlikte ("1.", "2.", "3."), ustte "Aynı isteği üç farklı biçimde
-     * yaz.". "Yanıtı Kaydet / Sonraki Soru" en az bir alan doluyken etkin; dolu alanlar sirasiyla, bosluksuz kaydedilir;
+     * "Nasıl cevaplayacaksın?" (kullanici istegi 16 Ekim): onaydan sonra, ilk sorudan once, yalniz yeni oturumda.
+     * Oturum onayla olusmustur; bu sayfada sekme kapanirsa "Ankete Devam Et" dogrudan siradaki soruya gider.
+     */
+    function renderHowTo(sid) {
+      screen = 'howto';
+      var main = h('main', { class: 'screen' });
+      main.appendChild(h('h1', { class: 'title' }, T.howToTitle));
+      T.howToText.forEach(function (t) { main.appendChild(h('p', {}, t)); });
+      main.appendChild(h('section', { class: 'card example', id: 'howto-example', 'aria-labelledby': 'howto-example-title' },
+        h('h2', { class: 'card-title', id: 'howto-example-title' }, T.howToExampleTitle),
+        h('ol', { class: 'example-list' }, T.howToExample.map(function (t) { return h('li', {}, t); })),
+        h('p', { class: 'muted' }, T.howToExampleNote)));
+      main.appendChild(h('p', { class: 'note' }, T.howToNote));
+      main.appendChild(h('div', { class: 'actions' },
+        button(T.howToStart, 'primary', function () { renderQuestion(sid); }, { id: 'howto-start' })));
+      show(T.howToTitle, main);
+    }
+
+    /**
+     * Soru ekrani (TASARIM-v2 §2): uc yanit alani birlikte ("1.", "2.", "3."), ustte "Bu, sesli asistana vereceğin bir
+     * komut; ona söyler gibi yaz.". "Yanıtı Kaydet / Sonraki Soru" en az bir alan doluyken etkin; dolu alanlar sirasiyla, bosluksuz kaydedilir;
      * ayni cumle iki alanda varsa kayit yok.
      * "Soruyu Geç" her zaman var (yazilan metin kaydedilmez). Son soru bitince "Son bir soru" (oneriler) ekrani.
      */
@@ -3420,7 +3442,7 @@ h2:focus {
     ERROR_MESSAGES: ERROR_MESSAGES,
     errorMessageFor: errorMessageFor,
     createEngine: createEngine,
-    consentSections: consentSections,
+    consentItems: consentItems,
     countText: countText,
     completedText: completedText,
     formatShortDateTime: formatShortDateTime,
