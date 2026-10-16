@@ -452,15 +452,66 @@ h2:focus {
   width: 2.25rem;
 }
 
-/* Nasil cevaplayacaksin: ornek kutusu; onay: kisa madde listesi */
-.example {
-  background: var(--info-bg);
+/* Baslangic: asistan karti ve ust bilgi satiri */
+/* margin-top .screen > * + * kuralindan gelir (16px) */
+.what-list,
+.steps,
+.tips {
+  margin-bottom: 0;
+  padding-left: 1.4rem;
 }
 
-.example-list {
-  margin: 0;
-  padding-left: 1.5rem;
-  font-weight: 500;
+.what-list {
+  margin-top: 6px;
+}
+
+.what-list > li + li,
+.tips > li + li {
+  margin-top: 4px;
+}
+
+.steps > li + li {
+  margin-top: 8px;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+/* Nasil cevaplayacaksin: kucuk soru ekrani gibi ornek (etkilesimsiz) */
+.example-q {
+  border: 2px dashed var(--outline);
+}
+
+.example-badge {
+  display: inline-block;
+  padding: 2px 12px;
+  border-radius: 999px;
+  background: var(--info-bg);
+  color: var(--primary);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.example-prompt {
+  font-size: 1.125rem;
+  padding: 12px;
+  background: var(--bg);
+}
+
+.example-answers > * + * {
+  margin-top: 8px;
+}
+
+.example-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 14px;
+  background: var(--bg);
+  cursor: default;
 }
 
 .consent-list {
@@ -1433,8 +1484,53 @@ h2:focus {
     base64Bytes: base64Bytes,
   };
 
+  // ---------------------------------------------------------------- Gonderim: otomatik yeniden deneme politikasi
+
+  var RETRY_DELAYS_MS = [5000, 15000, 45000]; // 1., 2., 3. yeniden deneme; sonra her 2 dk
+  var RETRY_STEADY_MS = 120000;
+  var RETRY_JITTER = 0.2; // ±%20
+  var TRANSIENT_ERRORS = ['busy', 'rate_limited', 'server_error'];
+
+  var retry = {
+    DELAYS_MS: RETRY_DELAYS_MS,
+    STEADY_MS: RETRY_STEADY_MS,
+    JITTER: RETRY_JITTER,
+    TRANSIENT_ERRORS: TRANSIENT_ERRORS,
+    /** attempt. yeniden denemeden once beklenecek sure (1 tabanli): 5, 15, 45 sn, sonra 120 sn; rand() -> [0,1) jitter. */
+    delayMs: function (attempt, rand) {
+      var n = Math.max(1, Math.floor(attempt) || 1);
+      var base = n <= RETRY_DELAYS_MS.length ? RETRY_DELAYS_MS[n - 1] : RETRY_STEADY_MS;
+      var r = typeof rand === 'function' ? rand() : 0.5;
+      return Math.round(base * (1 - RETRY_JITTER + 2 * RETRY_JITTER * r));
+    },
+    /**
+     * Bir gonderi denemesinin sonucu: 'ok' | 'transient' (kendiliginden yeniden denenir) | 'permanent' (durulur, ileti
+     * gosterilir). outcome: {ok} ya da {code: network|timeout|unexpected|rejected|..., status, error}.
+     * Gecici: ag hatasi, zaman asimi, sozlesme disi her yanit ('unexpected': HTML sayfasi, HTTP 404/5xx, saglik JSON'u,
+     * alindi kodu ya da audio_uri olmayan ok:true, ok alani olmayan JSON; Google'in yonlendirme katmani bunlari ara sira
+     * donduruyor, alicilar tekrari ayiklar) ve ok:false ile busy / rate_limited / server_error. Alicinin kendi hata
+     * kodlari (wrong_study_key, invalid_payload, payload_too_large, plan_invalid, bilinmeyen kodlar...) ve yerel
+     * hatalar kalici.
+     */
+    classify: function (o) {
+      if (!o) return 'transient';
+      if (o.ok === true) return 'ok';
+      switch (o.code) {
+        case 'network':
+        case 'timeout':
+        case 'unexpected':
+          return 'transient';
+        case 'rejected':
+          return TRANSIENT_ERRORS.indexOf(o.error) >= 0 ? 'transient' : 'permanent';
+        default:
+          return 'permanent';
+      }
+    },
+  };
+
   var api = {
     APP_VERSION: APP_VERSION,
+    retry: retry,
     answerPolicy: answerPolicy,
     qualityFlags: qualityFlags,
     progress: progress,
@@ -1471,13 +1567,29 @@ h2:focus {
   var MAX_SUGGESTIONS = 10; // "Son bir soru" alan sayisi (TASARIM-v2 §5)
   var MAX_SUGGESTION_LENGTH = 300;
   var AUDIO_MAX_MS = 15000; // tek ses kaydi en cok 15 sn (TASARIM-v2 §8)
+  var SEND_INTERVAL_MS = 60000; // artimli gonderim: oturum basina iki gonderi arasi en az 60 sn
+  var SEND_INTERVAL_MAX_MS = 300000; // busy/rate_limited araligi en cok 5 dk'ya uzatir
+  var BEACON_REPEAT_MS = 10000; // ayni bekleyen veri bu sure icinde ikinci kez beacon'la atilmaz (pagehide + visibilitychange)
 
   var T = {
     appName: 'Sesli Asistan Anketi',
-    startSubtitle: 'Sesli asistanlara söyleyeceğin doğal komutları toplamak için hazırlanmış bir anket.',
-    startLocalInfo: 'Yanıtların bu bilgisayarda, tarayıcının yerel deposunda saklanır. Anketi bitirince "Gönder" ile araştırmacıya iletirsin; sen göndermeden hiçbir şey internete gitmez.',
+    startSubtitle: 'Telefonlar için Siri benzeri, Türkçe bir sesli asistan geliştiriyoruz. İnsanların ona nasıl seslendiğini öğrenmek istiyoruz.',
+    startWhatTitle: 'Bu asistan ne yapar?',
+    startWhatLead: 'Telefonundaki işleri senin yerine yapar; sen söylersin, o yapar:',
+    startWhat: [
+      'Feneri, Wi-Fi\'ı, Bluetooth\'u, mobil veriyi açıp kapatır',
+      'Ekran parlaklığını ve telefonun sesini ayarlar',
+      'Arama yapar, gelen aramayı açar ya da reddeder; mesaj gönderir, gelen mesajları okur',
+      'Alarm, sayaç ve kronometre kurar; takvime etkinlik ekler',
+      'Yol tarifi verir, yakındaki yerleri ve nöbetçi eczaneyi bulur',
+      'Kamerayı, galeriyi, notları ve uygulamaları açar; müzik çalar',
+    ],
+    startEndQuestion: 'Anketin sonunda bu asistanda görmek istediğin başka özellikleri de soracağız.',
+    startMeta: '{n} kısa soru · yaklaşık 30–45 dakika · istediğin an ara verip sonra devam edebilirsin.',
+    startLocalInfo: 'Yanıtların bu tarayıcıda da saklanır ve kaydettikçe araştırmacıya iletilir.',
     startLocalInfoNone: 'Yanıtların bu bilgisayarda, tarayıcının yerel deposunda saklanır. Bu ankette internet gönderimi yok; bitirince "Dosyaya kaydet" ile bir dosyaya kaydedip araştırmacıya iletirsin.',
-    startPrivacyNote: 'Yanıtların yalnızca bu tarayıcıda durur; gönderene ya da "Dosyaya kaydet" diyene kadar başka bir kopyası yoktur. Gizli (özel) pencerede ya da site verisini kapanışta silen ayarlarda, pencereyi kapatınca yanıtlar kaybolur.',
+    startPrivacyNote: 'Henüz gönderilemeyen yanıtların yalnızca bu tarayıcıda durur; bağlantı gelince kendiliğinden gönderilir, istersen "Dosyaya kaydet" ile bir kopyasını alabilirsin. Gizli (özel) pencerede ya da site verisini kapanışta silen ayarlarda, gönderilmemiş yanıtlar pencereyi kapatınca kaybolur.',
+    startPrivacyNoteNone: 'Yanıtların yalnızca bu tarayıcıda durur; "Dosyaya kaydet" diyene kadar başka bir kopyası yoktur. Gizli (özel) pencerede ya da site verisini kapanışta silen ayarlarda, pencereyi kapatınca yanıtlar kaybolur.',
     startBegin: 'Anketi Başlat',
     startResume: 'Ankete Devam Et',
     startNew: 'Yeni Anket Başlat',
@@ -1516,16 +1628,24 @@ h2:focus {
     // onay ekrani (kisa) ve "Nasıl cevaplayacaksın?" sayfasi (kullanici istegi 16 Ekim)
     consentPurpose: 'Sesli asistanların günlük dili daha iyi anlaması için örnek komutlar topluyoruz.',
     howToTitle: 'Nasıl cevaplayacaksın?',
-    howToText: [
-      'Her soruda telefonundaki sesli asistandan bir iş isteyeceksin. Asistana gerçekte nasıl söylüyorsan öyle yaz.',
-      'Aynı isteği farklı biçimlerde söyleyebilirsin; her soruda üç cevap alanı var, aklına gelen farklı cümleleri yaz.',
+    howToSteps: [
+      'Her soruda telefonunda yapmak istediğin bir iş yazar.',
+      'Asistana gerçekte nasıl söylüyorsan öyle yaz. Kısa bir komut da olur, uzun bir cümle de.',
+      'Aynı isteği başka türlü de söyleyebilirsin: aklına gelen farklı söyleyişleri 2. ve 3. alana yaz.',
     ],
-    howToExampleTitle: 'Örnek: hesap makinesini açmak istesen',
-    howToExample: ['Hesap makinesini aç', 'Bana hesap makinesi lazım', 'Hesap makinesi uygulamasını başlat'],
-    howToExampleNote: 'Sorularda da böyle farklı cümleler kur. Bunlar yalnızca örnek; kendi söyleyişini yaz.',
-    howToNote: '"Hey asistan" gibi bir uyandırma sözü gerekmez. Gerçek telefon numarası ya da kişisel bilgi yazma.',
+    // ornek ankette yok (hesap makinesi ornegi open_app sorusunu yonlendiriyordu)
+    howToExampleLabel: 'Örnek',
+    howToExampleQuestion: 'Telefonunun ekranını koyu renkli moda almak istiyorsun. Asistana ne dersin?',
+    howToExample: ['Karanlık modu aç', 'Ekranı koyu temaya al', 'Gece modunu açar mısın'],
+    howToExampleNote: 'Bu soru ankette yok, yalnızca örnek; sorularda kendi söyleyişini kullan.',
+    howToTips: [
+      'Bir cümlede tek bir iş iste.',
+      'İsim, saat, yer gibi bir bilgi gerekiyorsa kendin seç ya da uydur.',
+      '"Hey asistan" gibi bir uyandırma sözü gerekmez.',
+      'Gerçek telefon numarası ya da kişisel bilgi yazma.',
+    ],
+    howToAudioTip: 'Yazmak yerine kayıt düğmesiyle sesli de cevap verebilirsin.',
     howToStart: 'Ankete başla',
-    howToAudio: 'İstersen cevaplarını yazmak yerine kayıt düğmesiyle sesli de verebilirsin.',
     consentAudio: 'Sesli cevaplarımın ses kaydı olarak saklanmasını kabul ediyorum.',
     audioRecord: 'Sesle cevapla',
     audioStop: 'Durdur',
@@ -1564,7 +1684,7 @@ h2:focus {
     cancel: 'Vazgeç',
     completedTitle: 'Teşekkürler! Anket tamamlandı.',
     completedHome: 'Ana ekrana dön',
-    completedSendInfo: 'Yanıtlarını araştırmacıya iletmek için "Gönder"e bas. Sen basmadan hiçbir şey internete gitmez.',
+    completedSendInfo: 'Yanıtların kaydettikçe araştırmacıya iletildi; kalanlar şimdi gönderiliyor. "Tüm yanıtların gönderildi" yazınca sayfayı kapatabilirsin.',
     sendNoneInfo: 'Bu ankette internet gönderimi kapalı. Yanıtlarını "Dosyaya kaydet" ile bir dosyaya kaydedip araştırmacıya kendin iletebilirsin.',
     send: 'Gönder',
     sendPartial: 'Şimdiye kadarkini gönder',
@@ -1573,7 +1693,11 @@ h2:focus {
     sendRetry: 'Tekrar dene',
     sendAgain: 'Yeniden gönder',
     saveFile: 'Dosyaya kaydet',
-    sendOk: 'Yanıtların gönderildi. Teşekkürler!',
+    sendOk: 'Tüm yanıtların gönderildi.',
+    sendWaiting: 'Alıcı meşgul, {n} sn sonra yeniden denenecek.',
+    sendRetryNow: 'Şimdi dene',
+    sendPendingRows: '{n} yanıt gönderilmeyi bekliyor.',
+    sendPendingAudio: '{n} ses kaydı gönderilmeyi bekliyor.',
     sendFailed: 'Gönderilemedi. ',
     sendPersistNote: 'Gönderildi ama bu tarayıcı gönderildi bilgisini saklayamadı.',
     sendOldBank: 'Bu anket başka bir soru havuzu sürümüyle başlatıldığı için gönderilemez. "Dosyaya kaydet"i kullan.',
@@ -1581,7 +1705,7 @@ h2:focus {
     sendNoTarget: 'İnternet gönderimi kapalı.',
     sendNoFetch: 'Bu tarayıcı gönderimi desteklemiyor.',
     sendNotFound: 'Oturum bulunamadı.',
-    sendBadReply: 'Sunucudan beklenen yanıt gelmedi.',
+    sendUnexpected: 'Alıcıdan beklenmeyen yanıt geldi',
     sendNetwork: 'Sunucuya ulaşılamadı. İnternet bağlantını kontrol et.',
     fileSaved: 'Dosya kaydedildi.',
     fileDownloadStarted: 'İndirme başlatıldı; dosyayı İndirilenler klasöründe bulabilirsin.',
@@ -1744,6 +1868,21 @@ h2:focus {
   function isPlainObject(v) {
     return v !== null && typeof v === 'object' && !Array.isArray(v);
   }
+
+  /** Alicinin sozlesme hatasi: {"ok": false, "error": "<kod>"} (bos olmayan kod). */
+  function isErrorReply(reply) {
+    return isPlainObject(reply) && reply.ok === false && typeof reply.error === 'string' && reply.error !== '';
+  }
+
+  /**
+   * Sozlesme disi yanit (HTML sayfasi, saglik JSON'u, alindi kodu olmayan ok:true, HTTP 404/5xx...): gecicidir,
+   * gonderi yeniden denenir (alicilar response_id ile tekrari ayiklar).
+   */
+  function unexpectedReply(status) {
+    var http = typeof status === 'number' && (status < 200 || status >= 300) ? ' (HTTP ' + status + ')' : '';
+    return { ok: false, code: 'unexpected', status: status, message: T.sendUnexpected + http + '.' };
+  }
+
   function isStr(v) {
     return typeof v === 'string';
   }
@@ -1845,6 +1984,8 @@ h2:focus {
       }
     }
     if (s.audio_sent !== undefined && !(Array.isArray(s.audio_sent) && s.audio_sent.every(isStr))) return 'audio_sent';
+    if (s.auto_send !== undefined && typeof s.auto_send !== 'boolean') return 'auto_send';
+    if ((s.rev !== undefined && !(isInt(s.rev) && s.rev >= 0)) || (s.sent_rev !== undefined && !(isInt(s.sent_rev) && s.sent_rev >= 0))) return 'rev';
     if (s.sent_ids !== undefined && !Array.isArray(s.sent_ids)) return 'sent_ids';
     if (s.sent_rejected !== undefined && !Array.isArray(s.sent_rejected)) return 'sent_rejected';
     if (s.sent_at !== undefined && s.sent_at !== null && !isNum(s.sent_at)) return 'sent_at';
@@ -1916,7 +2057,7 @@ h2:focus {
   function consentItems(config) {
     var c = config.consent || {};
     var send = config.send && config.send.type !== 'none'
-      ? 'Bitirince "Gönder"e bastığında yanıtların araştırmacıya iletilir; basmadan hiçbir şey gönderilmez.'
+      ? 'Yanıtların, kaydettikçe kısa aralıklarla araştırmacıya iletilir; gönderilen yanıtlarının silinmesini istersen araştırmacıya bildirebilirsin.'
       : 'Yanıtların bu bilgisayarda kalır; bitirince "Dosyaya kaydet" ile araştırmacıya iletirsin.';
     return [
       { label: 'Kaydedilen', text: 'Yazdığın cümleler; ses kaydına onay verirsen sesli cevapların da. Soru ve zaman bilgisi. Adın, telefon numaran ya da cihaz kimliğin kaydedilmez.' },
@@ -1944,6 +2085,19 @@ h2:focus {
     var rng = opts.rng || null;
     // ses kayitlari deposu (tarayicida IndexedDB): get(response_id) -> Promise<{mime, data(base64)} | null>
     var audioStore = opts.audioStore || null;
+    // yeniden deneme zamanlayicisi (testte sahte), jitter rastgelesi ve zaman olcegi (yuk testi zamani sikistirir)
+    var timers = opts.timers || {
+      setTimeout: function (fn, ms) { return setTimeout(fn, ms); },
+      clearTimeout: function (t) { clearTimeout(t); },
+    };
+    var random = opts.random || Math.random;
+    // bekleme olcegi (yuk testi zamani sikistirir): aralik ve yeniden deneme sureleri bununla carpilir
+    var delayScale = typeof opts.delayScale === 'number' && opts.delayScale >= 0 ? opts.delayScale : 1;
+    // artimli gonderim (tarayicida acik; testte yalniz istenince): kaydettikce gonderir
+    var autoSend = opts.autoSend === true;
+    var defaultFetch = opts.fetchImpl || null;
+    var beaconImpl = opts.beacon || null; // (url, metin) -> bool: navigator.sendBeacon
+    var closed = false;
     var checksum = opts.bankChecksum || config.bank_checksum || '';
     var sendCfg = config.send || { type: 'none' };
     var studyId = String(config.study_id);
@@ -1953,8 +2107,9 @@ h2:focus {
     var data = emptyStore();
     var blocked = false; // bozuk veri ayrilamadi: ustune yazmak veri kaybettirir, yazmalar reddedilir
     var inflight = Object.create(null); // "<oturum>:<konum>" -> {eventId, attempts, shownAt}: yeniden denemelerde sabit
-    var sending = Object.create(null); // oturum -> suren gonderim sozu
+    var senders = Object.create(null); // oturum -> gonderici durumu (ucustaki istek, bekleme, aralik)
     var progress = Object.create(null); // oturum -> ses gonderim ilerleme metni
+    var beaconed = Object.create(null); // oturum -> {key, at}: son beacon (kapanista iki olay ayni veriyi iki kez atmasin)
     var lastSend = Object.create(null); // oturum -> son gonderim sonucu (bellekte)
     var listeners = [];
 
@@ -2139,6 +2294,16 @@ h2:focus {
       return out;
     }
 
+    /** Bir yanit satirinin konumundaki butun satirlar (0. yanit ve ek yanitlar). */
+    function positionRows(s, responseId) {
+      var out = [];
+      responseList(s).forEach(function (r) {
+        var rows = [r].concat(extrasOf(r));
+        if (rows.some(function (x) { return x.response_id === responseId; })) out = rows;
+      });
+      return out;
+    }
+
     /** Oturumdaki butun onaylanmis yanit metinleri (kalite bayraklarinda "diger yanitlar", TASARIM-v2 §2). */
     function answeredTexts(s) {
       var out = [];
@@ -2204,6 +2369,7 @@ h2:focus {
     /** Son gonderim yukunde olmayan yanit (ek yanit dahil) ya da farkli durum var mi (alici reddettikleri dahil degil). */
     function hasNewSinceSend(s) {
       if (!s.sent_at) return true;
+      if ((s.rev || 0) !== (s.sent_rev || 0)) return true;
       if (s.sent_status !== s.status) return true;
       var posted = new Set(s.sent_ids || []);
       return rowList(s).some(function (r) { return !posted.has(r.response_id); });
@@ -2225,6 +2391,7 @@ h2:focus {
 
     function isUnsent(s) {
       if (!s.sent_at) return true;
+      if ((s.rev || 0) !== (s.sent_rev || 0)) return true; // oturum bilgisi (ornegin oneriler) sonradan degisti
       if (sendCfg.type !== 'none' && pendingAudio(s).length > 0) return true; // ses dosyalari da gitmeli
       if (s.sent_status !== s.status) return true;
       var accepted = acceptedSet(s);
@@ -2259,6 +2426,10 @@ h2:focus {
         audioConsent: s.audio_consent === true,
         audioCount: audioRows(s).length,
         audioPending: pendingAudio(s).length,
+        pendingRows: (function () {
+          var posted = new Set(s.sent_ids || []);
+          return rowList(s).filter(function (r) { return !posted.has(r.response_id); }).length;
+        }()),
         legacyBank: !sameBank(s),
       };
     }
@@ -2377,6 +2548,9 @@ h2:focus {
         region: demo.region,
         assistant_usage: demo.assistant_usage,
         audio_consent: o.audioConsent === true, // TASARIM-v2 §8: istege bagli ses kaydi onayi
+        // onay metni "kaydettikçe iletilir" diyorsa artimli gonderim; eski oturumlar yalniz "Gönder" ile gider
+        auto_send: sendCfg.type !== 'none' && Boolean(sendCfg.url),
+        rev: 1, // oturum degisiklik sayaci (gonderilmemis oturum bilgisi: rev != sent_rev)
         items: items,
         responses: {},
       };
@@ -2571,6 +2745,7 @@ h2:focus {
         // baska sekme araya girdi: ilk kayit korunur, bu yanit baska soruya yazilmaz
         if (ds.responses[pos] || nextPositionOf(ds) !== pos || ds.items[pos].question_id !== item.question_id) { lost = 'stale'; return false; }
         ds.responses[pos] = response;
+        ds.rev = (ds.rev || 0) + 1;
         var next = nextPositionOf(ds);
         var completed = next === null;
         ds.current_question_index = completed ? ds.total_questions : next;
@@ -2585,6 +2760,7 @@ h2:focus {
       if (res === 'storage') return { ok: false, reason: 'storage' };
       if (res === 'aborted') return { ok: false, reason: lost || 'stale' };
       for (var i = 0; i < ANSWERS_PER_QUESTION; i++) delete inflight[flightKey(sid, pos, i)];
+      kick(sid); // artimli gonderim: kaydedilen soru bekleyenlere eklendi
       var cur = data.sessions[sid];
       var done = counts(cur); // mola hatirlatici konum sayisiyla calisir
       var answeredOrSkipped = done.answered + done.skipped;
@@ -2625,9 +2801,11 @@ h2:focus {
         if (!ds || ds.status !== 'completed' || ds.feature_suggestions !== undefined) return false;
         ds.feature_suggestions = clean;
         ds.last_active_at = now();
+        ds.rev = (ds.rev || 0) + 1;
       });
       if (res === 'storage') return { ok: false, reason: 'storage' };
       if (res === 'aborted') return { ok: false, reason: 'closed' };
+      kick(sid, { now: true }); // anket sonu: kalanlar ve oneriler hemen
       return { ok: true, suggestions: clean.slice() };
     }
 
@@ -2641,10 +2819,13 @@ h2:focus {
       reload();
       var s = data.sessions[sid];
       if (!s || !visible(s) || !sameBank(s) || !isResumable(s)) return false;
-      return commit(function (d) {
+      var ok = commit(function (d) {
         d.sessions[sid].status = target;
         d.sessions[sid].last_active_at = now();
+        d.sessions[sid].rev = (d.sessions[sid].rev || 0) + 1;
       }) === 'ok';
+      if (ok) kick(sid); // durum degisikligi (ara verme, birakma) de gonderilir
+      return ok;
     }
 
     function sessionBySid(sid) {
@@ -2654,6 +2835,24 @@ h2:focus {
     }
 
     // ---- gonderim
+
+    /**
+     * Gonderi nesnesi: tam (butun satirlar) ya da artimli (yalniz alicinin onaylamadigi satirlar + forceIds; oturum
+     * bilgisi her zaman). Alicilar response_id ile tekrari ayiklar, eski oturum guncellemesini yok sayar (K-79).
+     */
+    function buildSubmission(s, sentAt, full, forceIds) {
+      var obj = core.payload.submission(s, {
+        study_id: s.study_id,
+        study_key: sendCfg.study_key === undefined || sendCfg.study_key === '' ? null : sendCfg.study_key,
+        bank_checksum: s.bank_checksum,
+        sent_at: sentAt,
+      });
+      if (!full) {
+        var posted = new Set(s.sent_ids || []);
+        obj.responses = obj.responses.filter(function (r) { return !posted.has(r.response_id) || forceIds[r.response_id]; });
+      }
+      return obj;
+    }
 
     function submissionObject(sid, sentAt) {
       var s = sessionBySid(sid);
@@ -2683,19 +2882,28 @@ h2:focus {
       return commit(function (d) {
         var s = d.sessions[sid];
         if (!s) return false;
+        // artimli gonderimde onaylanan kimlikler birikir; yeniden gonderilip kabul edilen eski ret kalkar
+        var ids = new Set(s.sent_ids || []);
+        snapshot.ids.forEach(function (id) { ids.add(id); });
+        var posted = new Set(snapshot.ids);
+        var rejected = new Set((s.sent_rejected || []).filter(function (id) { return !posted.has(id); }));
+        rejectedIds.forEach(function (id) { rejected.add(id); });
         s.sent_at = sentAt;
         s.receipt = receipt === undefined ? null : receipt;
         s.sent_status = snapshot.status;
-        s.sent_ids = snapshot.ids.slice();
-        s.sent_count = snapshot.ids.length;
-        s.sent_rejected = rejectedIds.slice();
+        s.sent_rev = snapshot.rev;
+        s.sent_ids = Array.from(ids);
+        s.sent_count = s.sent_ids.length;
+        s.sent_rejected = Array.from(rejected);
       }) === 'ok';
     }
 
     /**
-     * Gonderi: POST text/plain (CORS on ucusu yok). Yalnizca yanit JSON'unda ok === true ise basari sayilir.
-     * Her HTTP durumunda govde okunur; {"ok":false,"error":"<kod>"} Turkce iletiye cevrilir.
-     * Donus: {ok:true, receipt, accepted, rejected, persisted} | {ok:false, code, message[, error]}
+     * Gonderi: POST text/plain (CORS on ucusu yok). Basari YALNIZ HTTP 2xx + {"ok": true, "receipt": "<metin>"}:
+     * Google'in yonlendirme katmani bir POST'a ara sira saglik JSON'u ya da HTML 404 donduruyor (16 Ekim canli
+     * olcum); ok:true goren her yaniti basari saymak islenmemis gonderiyi "gonderildi" yapardi. Her HTTP durumunda
+     * govde okunur; {"ok":false,"error":"<kod>"} Turkce iletiye cevrilir; geri kalan her yanit 'unexpected' (gecici).
+     * Donus: {ok:true, receipt, accepted, rejected, persisted} | {ok:false, code, message[, error, status]}
      */
     function send(sid, o) {
       o = o || {};
@@ -2715,10 +2923,11 @@ h2:focus {
         return Promise.resolve({ ok: false, code: 'old_bank', message: T.sendOldBank });
       }
       var sentAt = now();
-      var posted = submissionObject(sid, sentAt);
+      var posted = buildSubmission(session, sentAt, !o.delta, o.forceIds || {});
       var body = JSON.stringify(posted);
       var snapshot = {
         status: posted.session.status,
+        rev: session.rev || 0,
         ids: posted.responses.map(function (r) { return r.response_id; }),
       };
       var controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -2751,9 +2960,8 @@ h2:focus {
             } catch (e) {
               reply = undefined;
             }
-            var isObject = isPlainObject(reply);
-            if (isObject && reply.ok === true && res.ok) {
-              var receipt = typeof reply.receipt === 'string' ? reply.receipt : null;
+            if (isPlainObject(reply) && reply.ok === true && typeof reply.receipt === 'string' && res.ok) {
+              var receipt = reply.receipt;
               var rejectedList = Array.isArray(reply.rejected) ? reply.rejected : [];
               var postedIds = new Set(snapshot.ids);
               var rejectedIds = [];
@@ -2771,14 +2979,10 @@ h2:focus {
                 persisted: persisted,
               };
             }
-            if (isObject && reply.ok === false && typeof reply.error === 'string') {
-              return { ok: false, code: 'rejected', error: reply.error.slice(0, 200), message: errorMessageFor(reply.error) };
+            if (isErrorReply(reply)) {
+              return { ok: false, code: 'rejected', status: res.status, error: reply.error.slice(0, 200), message: errorMessageFor(reply.error) };
             }
-            if (!res.ok) {
-              return { ok: false, code: 'http', message: 'Sunucu hata döndürdü (HTTP ' + res.status + ').' };
-            }
-            if (reply === undefined) return { ok: false, code: 'bad_reply', message: T.sendBadReply };
-            return { ok: false, code: 'rejected', error: '', message: 'Sunucu gönderiyi kabul etmedi.' };
+            return unexpectedReply(res.status);
           });
         })
         .catch(function (e) {
@@ -2797,12 +3001,19 @@ h2:focus {
         });
     }
 
-    /** Tek ses dosyasi gonderisi: text/plain POST, govde JSON; zaman asimi ana gonderiyle ayni. */
+    /**
+     * Tek ses dosyasi gonderisi: text/plain POST, govde JSON; zaman asimi ana gonderiyle ayni. Basari YALNIZ HTTP 2xx +
+     * {"ok": true} ile "audio_uri" (metin) ya da "duplicate": true; geri kalan sozlesme disi yanit 'unexpected' (gecici).
+     * Donus: {ok:true, reply} | {ok:false, code: network|timeout|unexpected|rejected, status, error}.
+     */
     function postAudio(fetchImpl, body, timeoutMs) {
       var controller = typeof AbortController === 'function' ? new AbortController() : null;
       var timer = null;
       var timeout = new Promise(function (resolve) {
-        timer = setTimeout(function () { if (controller) controller.abort(); resolve(null); }, timeoutMs);
+        timer = setTimeout(function () {
+          if (controller) controller.abort();
+          resolve({ ok: false, code: 'timeout' });
+        }, timeoutMs);
       });
       var request = Promise.resolve().then(function () {
         return fetchImpl(sendCfg.url, {
@@ -2810,13 +3021,17 @@ h2:focus {
           credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller ? controller.signal : undefined,
         });
       }).then(function (res) {
-        return Promise.resolve(res.text()).then(function (t) {
-          try { return JSON.parse(t); } catch (e) { return null; }
-        }, function () { return null; });
-      });
-      return Promise.race([request, timeout])
-        .catch(function () { return null; })
-        .then(function (reply) { clearTimeout(timer); return reply; });
+        return Promise.resolve(res.text()).then(function (t) { return t; }, function () { return ''; }).then(function (t) {
+          var reply;
+          try { reply = JSON.parse(t); } catch (e) { reply = undefined; }
+          if (isPlainObject(reply) && reply.ok === true && res.ok && (typeof reply.audio_uri === 'string' || reply.duplicate === true)) {
+            return { ok: true, reply: reply };
+          }
+          if (isErrorReply(reply)) return { ok: false, code: 'rejected', status: res.status, error: reply.error.slice(0, 200) };
+          return unexpectedReply(res.status);
+        });
+      }, function () { return { ok: false, code: 'network' }; });
+      return Promise.race([request, timeout]).then(function (r) { clearTimeout(timer); return r; });
     }
 
     function markAudioSent(sid, id) {
@@ -2827,51 +3042,8 @@ h2:focus {
       }) === 'ok';
     }
 
-    /**
-     * Gonderilmemis ses dosyalarini sirayla yollar (TASARIM-v2 §8.1; ana gonderi basarili olduktan sonra). Basarili
-     * (ok:true ya da duplicate) olanlar audio_sent'e yazilir; digerleri sonraki "Gönder"de yeniden denenir.
-     * onProgress(i, n). Donus: Promise<{total, sent, failed}>.
-     */
-    function sendAudios(sid, o, onProgress) {
-      o = o || {};
-      var fetchImpl = o.fetchImpl || (root.fetch ? root.fetch.bind(root) : null);
-      var timeoutMs = o.timeoutMs || SEND_TIMEOUT_MS;
-      var s = sessionBySid(sid);
-      var list = s && audioStore && fetchImpl ? pendingAudio(s) : (s ? pendingAudio(s) : []);
-      var result = { total: list.length, sent: 0, failed: 0 };
-      if (!s || list.length === 0) return Promise.resolve(result);
-      if (!audioStore || !fetchImpl) {
-        result.failed = list.length;
-        return Promise.resolve(result);
-      }
-      var chain = Promise.resolve();
-      list.forEach(function (r, i) {
-        chain = chain.then(function () {
-          if (onProgress) onProgress(i + 1, list.length);
-          return Promise.resolve().then(function () { return audioStore.get(r.response_id); }).then(function (file) {
-            if (!file || !file.data || core.payload.base64Bytes(file.data) > core.payload.AUDIO_MAX_BYTES) return null;
-            var body = JSON.stringify(core.payload.audio({
-              study_id: s.study_id,
-              study_key: sendCfg.study_key === undefined || sendCfg.study_key === '' ? null : sendCfg.study_key,
-              session_id: s.session_id,
-              response_id: r.response_id,
-              mime: file.mime || r.audio_mime,
-              duration_ms: r.audio_duration_ms,
-              data: file.data,
-            }));
-            return postAudio(fetchImpl, body, timeoutMs);
-          }, function () { return null; }).then(function (reply) {
-            if (isPlainObject(reply) && reply.ok === true) {
-              markAudioSent(sid, r.response_id);
-              result.sent++;
-            } else {
-              result.failed++;
-            }
-          });
-        });
-      });
-      return chain.then(function () { return result; });
-    }
+    // ses gonderisinde bunlar butun gonderimi durdurur (ayni anahtar/calisma ana gonderide de reddedilir)
+    var STUDY_ERRORS = ['wrong_study_key', 'wrong_study_id', 'bank_version_mismatch', 'unsupported_format'];
 
     /** Ses kayitlarini base64 olarak tasiyan dosya metni ("Dosyaya kaydet", TASARIM-v2 §8.1: audio[]). */
     function fileTextWithAudio(sid) {
@@ -2900,66 +3072,394 @@ h2:focus {
       });
     }
 
-    /**
-     * Gonderimi baslatir ve oturum basina suren durumu tutur (ekran degisse de kaybolmaz); bitince dinleyicilere
-     * haber verir (WR1-06). Ayni oturum icin ikinci cagri suren sozu dondurur.
-     */
-    function beginSend(sid, o) {
-      if (sending[sid]) return sending[sid];
-      delete lastSend[sid];
-      var p;
-      try {
-        // once olagan gonderi, basariliysa gonderilmemis ses dosyalari sirayla (TASARIM-v2 §8.1)
-        p = send(sid, o).then(function (r) {
-          var cur = sessionBySid(sid);
-          if (!r.ok || !cur || pendingAudio(cur).length === 0) return r;
-          return sendAudios(sid, o, function (i, n) {
-            progress[sid] = T.sendingAudio + ' ' + i + '/' + n;
-            notify(sid);
-          }).then(function (a) {
-            delete progress[sid];
-            if (a.failed > 0) {
-              return { ok: false, code: 'audio', message: 'Yanıtların gönderildi ama ' + a.failed + ' ses kaydı gönderilemedi; tekrar dene.', audio: a };
-            }
-            r.audio = a;
-            return r;
-          });
-        });
-      } catch (e) {
-        p = Promise.resolve({ ok: false, code: 'internal', message: T.sendInternal });
-      }
-      var tracked = Promise.resolve(p)
-        .catch(function () { return { ok: false, code: 'internal', message: T.sendInternal }; })
-        .then(function (r) {
-          delete sending[sid];
-          delete progress[sid];
-          lastSend[sid] = r;
-          notify(sid);
-          return r;
-        });
-      sending[sid] = tracked;
+    // ---- gonderici (artimli, kullanici karari 16 Ekim): kaydettikce, oturum basina ayni anda tek istek, iki gonderi
+    // arasi en az SEND_INTERVAL_MS (birikenler bir sonrakine biner), ses dosyalari yanit satiri alicida onaylaninca
+    // sirayla; gecici hatada core.retry beklemesi (busy/rate_limited araligi uzatir), kalici hatada durur.
+
+    /** Alicinin henuz onaylamadigi yanit satirlari (reddedilenler tekrar gitmez). */
+    function unsentRows(s) {
+      var posted = new Set(s.sent_ids || []);
+      return rowList(s).filter(function (r) { return !posted.has(r.response_id); });
+    }
+
+    /** Oturum bilgisi (durum, oneriler...) son gonderiden beri degisti mi. */
+    function stateDirty(s) {
+      return !s.sent_at || s.sent_status !== s.status || (s.rev || 0) !== (s.sent_rev || 0);
+    }
+
+    function newSender() {
+      return {
+        busy: false, timer: null, timerKind: null, waitUntil: null, lastSubmitAt: null, interval: SEND_INTERVAL_MS,
+        attempt: 0, lastFailure: null, stopped: null, full: false, now: false, forceRows: {}, resubmitted: {}, dead: {},
+        batch: null, waiters: [], manual: null, o: {},
+      };
+    }
+
+    function senderOf(sid) {
+      return senders[sid] || (senders[sid] = newSender());
+    }
+
+    function needsSubmission(s, st) {
+      return stateDirty(s) || unsentRows(s).length > 0 || Object.keys(st.forceRows).length > 0;
+    }
+
+    /** Gonderilebilir ses: satiri alicida kabul edilmis, gonderilmemis, kalici hatali degil. */
+    function sendableAudio(s, st) {
+      var acc = acceptedSet(s);
+      var sent = new Set(s.audio_sent || []);
+      return rowList(s).filter(function (r) {
+        return r.has_audio === true && acc.has(r.response_id) && !sent.has(r.response_id) && !st.dead[r.response_id] && !st.forceRows[r.response_id];
+      });
+    }
+
+    function senderFetch(st) {
+      return st.o.fetchImpl || defaultFetch || (root.fetch ? root.fetch.bind(root) : null);
+    }
+
+    function schedule(sid, ms, kind) {
+      var st = senderOf(sid);
+      if (st.timer) timers.clearTimeout(st.timer);
+      st.timerKind = kind;
+      st.waitUntil = now() + ms;
+      st.timer = timers.setTimeout(function () {
+        st.timer = null;
+        st.timerKind = null;
+        st.waitUntil = null;
+        if (kind === 'backoff') st.now = true; // bekleme bitti: aralik kurali yeniden denemeyi ertelemez
+        pump(sid);
+      }, Math.max(0, ms));
+    }
+
+    function clearTimer(st) {
+      if (st.timer) timers.clearTimeout(st.timer);
+      st.timer = null;
+      st.timerKind = null;
+      st.waitUntil = null;
+    }
+
+    /** Bekleyen "Gönder" sozlerini sonuclar (her sey gitti ya da kalici hata). */
+    function settle(sid, r) {
+      var st = senderOf(sid);
+      lastSend[sid] = r;
+      var waiters = st.waiters;
+      st.waiters = [];
+      st.manual = null;
       notify(sid);
-      return tracked;
+      waiters.forEach(function (w) { w(r); });
+    }
+
+    /** Siradaki adim: izin varsa gonderi, yoksa sesler, sonra aralik beklemesi; hepsi gittiyse sozler sonuclanir. */
+    function pump(sid) {
+      var st = senderOf(sid);
+      if (closed || st.busy || st.stopped) return;
+      if (st.timer && st.timerKind === 'backoff') return; // gecici hatadan sonra bekleme
+      var s = sessionBySid(sid);
+      if (!s || !sameBank(s) || sendCfg.type === 'none' || !sendCfg.url) return;
+      var pendingSub = st.full || needsSubmission(s, st);
+      var due = st.full || st.now || st.lastSubmitAt === null || now() - st.lastSubmitAt >= Math.round(st.interval * delayScale);
+      if (pendingSub && due) {
+        clearTimer(st);
+        submitStep(sid, s, st);
+        return;
+      }
+      var audio = sendableAudio(s, st);
+      if (audio.length > 0) {
+        audioStep(sid, s, st, audio);
+        return;
+      }
+      st.batch = null;
+      if (pendingSub) {
+        if (!st.timer) schedule(sid, st.lastSubmitAt + Math.round(st.interval * delayScale) - now(), 'interval');
+        if (st.waiters.length === 0) notify(sid);
+        return;
+      }
+      clearTimer(st);
+      var deadCount = Object.keys(st.dead).length;
+      if (st.waiters.length > 0 || deadCount > 0) {
+        if (deadCount > 0) {
+          var r = { ok: false, code: 'audio', message: 'Yanıtların gönderildi ama ' + deadCount + ' ses kaydı gönderilemedi.', dead: st.dead };
+          st.stopped = r;
+          settle(sid, r);
+        } else {
+          settle(sid, st.lastOk || { ok: true, receipt: s.receipt || null, accepted: null, rejected: [] });
+        }
+        return;
+      }
+      notify(sid);
+    }
+
+    function submitStep(sid, s, st) {
+      st.busy = true;
+      var full = st.full;
+      st.full = false;
+      st.now = false;
+      var force = st.forceRows;
+      notify(sid);
+      safeSend(sid, { fetchImpl: senderFetch(st), timeoutMs: st.o.timeoutMs, delta: !full, forceIds: force }).then(function (r) {
+        st.busy = false;
+        st.lastSubmitAt = now();
+        if (r.ok) {
+          st.attempt = 0;
+          st.lastFailure = null;
+          st.interval = Math.max(SEND_INTERVAL_MS, Math.round(st.interval / 2));
+          Object.keys(force).forEach(function (id) {
+            if (st.forceRows[id]) {
+              st.resubmitted[id] = (st.resubmitted[id] || 0) + 1;
+              delete st.forceRows[id];
+            }
+          });
+          st.lastOk = r;
+          pump(sid);
+          return;
+        }
+        if (full) st.full = true; // elle istenen tam gonderi yeniden denemede de tam
+        failed(sid, st, r);
+      });
+    }
+
+    /** Gecici hata: bekleme (5, 15, 45 sn, sonra 2 dk); busy/rate_limited araligi da uzatir. Kalici: dur. */
+    function failed(sid, st, r) {
+      if (core.retry.classify(r) === 'transient') {
+        st.attempt++;
+        var delay = core.retry.delayMs(st.attempt, random);
+        if (r.error === 'busy' || r.error === 'rate_limited' || r.status === 429 || r.status === 503) {
+          st.interval = Math.min(SEND_INTERVAL_MAX_MS, st.interval * 2);
+          delay = Math.max(delay, st.interval);
+        }
+        st.lastFailure = r;
+        schedule(sid, Math.round(delay * delayScale), 'backoff');
+        notify(sid);
+        return;
+      }
+      st.stopped = r;
+      settle(sid, r);
+    }
+
+    function audioStep(sid, s, st, audio) {
+      var r = audio[0];
+      if (!st.batch) st.batch = { done: 0, total: audio.length };
+      st.batch.total = st.batch.done + audio.length;
+      progress[sid] = T.sendingAudio + ' ' + (st.batch.done + 1) + '/' + st.batch.total;
+      st.busy = true;
+      notify(sid);
+      var fetchImpl = senderFetch(st);
+      Promise.resolve().then(function () {
+        if (!audioStore || !fetchImpl) return { ok: false, code: 'missing' };
+        return Promise.resolve(audioStore.get(r.response_id)).then(function (file) {
+          if (!file || !file.data) return { ok: false, code: 'missing' };
+          if (core.payload.base64Bytes(file.data) > core.payload.AUDIO_MAX_BYTES) return { ok: false, code: 'rejected', error: 'payload_too_large' };
+          return postAudio(fetchImpl, JSON.stringify(core.payload.audio({
+            study_id: s.study_id,
+            study_key: sendCfg.study_key === undefined || sendCfg.study_key === '' ? null : sendCfg.study_key,
+            session_id: s.session_id,
+            response_id: r.response_id,
+            mime: file.mime || r.audio_mime,
+            duration_ms: r.audio_duration_ms,
+            data: file.data,
+          })), st.o.timeoutMs || SEND_TIMEOUT_MS);
+        }, function () { return { ok: false, code: 'missing' }; });
+      }).then(function (res) {
+        st.busy = false;
+        delete progress[sid];
+        if (res.ok) {
+          markAudioSent(sid, r.response_id);
+          st.attempt = 0;
+          st.batch.done++;
+          pump(sid);
+          return;
+        }
+        if (res.code === 'rejected' && res.error === 'question_unknown') {
+          // alici yaniti bilmiyor: konumun satirlari yeniden gonderilir; iki basarili gonderiden sonra da gelirse kalici
+          if ((st.resubmitted[r.response_id] || 0) >= 2) {
+            st.dead[r.response_id] = 'question_unknown';
+            st.batch.done++;
+          } else {
+            positionRows(s, r.response_id).forEach(function (x) { st.forceRows[x.response_id] = true; });
+            st.now = true;
+          }
+          pump(sid);
+          return;
+        }
+        if (res.code === 'missing') {
+          st.dead[r.response_id] = 'missing';
+          st.batch.done++;
+          pump(sid);
+          return;
+        }
+        if (core.retry.classify(res) === 'transient') {
+          failed(sid, st, res);
+          return;
+        }
+        if (res.code === 'rejected' && STUDY_ERRORS.indexOf(res.error) >= 0) {
+          var fatal = { ok: false, code: 'rejected', error: res.error, message: errorMessageFor(res.error) };
+          st.stopped = fatal;
+          settle(sid, fatal);
+          return;
+        }
+        st.dead[r.response_id] = res.error || res.code; // bu kayit kalici hatali; digerleri surer
+        st.batch.done++;
+        pump(sid);
+      });
+    }
+
+    function safeSend(sid, o) {
+      try {
+        return Promise.resolve(send(sid, o)).catch(function () { return { ok: false, code: 'internal', message: T.sendInternal }; });
+      } catch (e) {
+        return Promise.resolve({ ok: false, code: 'internal', message: T.sendInternal });
+      }
+    }
+
+    /** Kayittan sonra: artimli gonderim acik ve oturum buna onay verdiyse gondericiyi calistirir. */
+    function kick(sid, o) {
+      if (!autoSend || closed) return;
+      var s = sessionBySid(sid);
+      if (!s || s.auto_send !== true || !sameBank(s) || sendCfg.type === 'none' || !sendCfg.url) return;
+      var st = senderOf(sid);
+      if (o && o.now) {
+        st.now = true;
+        if (st.timer && st.timerKind === 'interval') clearTimer(st);
+      }
+      pump(sid);
     }
 
     /**
-     * Gonderim paneli durumu: {state: 'idle'|'sending'|'ok'|'error', message, receipt, accepted, rejected, note}.
-     * 'ok' ve alici-ret sayisi depodaki kayittan turetilir; yeniden cizimde kaybolmaz.
+     * "Gönder" (elle): tam yuk hemen, sonra bekleyen sesler; gecici hatalarda kendiliginden yeniden dener (core.retry),
+     * kalici hatada durur. Soz, her sey gidince ya da kalici hatayla cozulur; suren gonderimde ayni sozu dondurur
+     * (beklemedeyse hemen dener). o: {fetchImpl, timeoutMs}.
+     */
+    function beginSend(sid, o) {
+      var st = senderOf(sid);
+      if (o) st.o = o;
+      if (st.manual) {
+        if (st.timer) retryNow(sid);
+        return st.manual;
+      }
+      delete lastSend[sid];
+      st.stopped = null;
+      st.dead = {};
+      st.full = true;
+      st.attempt = 0;
+      if (st.timer) clearTimer(st);
+      st.manual = new Promise(function (resolve) { st.waiters.push(resolve); });
+      var p = st.manual;
+      pump(sid);
+      return p;
+    }
+
+    /** Beklemedeki gonderimi hemen dener ("Şimdi dene"). */
+    function retryNow(sid) {
+      var st = senders[sid];
+      if (!st || !st.timer || st.busy) return false;
+      clearTimer(st);
+      st.now = true;
+      pump(sid);
+      return true;
+    }
+
+    /** Sayfa acildi: artimli gonderimi olan ve gonderilmemis verisi kalan oturumlar kendiliginden gonderilir. */
+    function resumePendingSends(o) {
+      reload();
+      var out = [];
+      if (!autoSend || sendCfg.type === 'none' || !sendCfg.url) return out;
+      sortedSessions().forEach(function (s) {
+        if (s.auto_send !== true || !sameBank(s)) return;
+        var st = senderOf(s.session_id);
+        if (o) st.o = o;
+        if (!needsSubmission(s, st) && pendingAudio(s).length === 0) return;
+        out.push(s.session_id);
+        kick(s.session_id, { now: true });
+      });
+      return out;
+    }
+
+    /**
+     * Sayfa kapanirken (pagehide, gorunmez sekme): gonderilmemis satirlar ve oturum bilgisi sendBeacon ile atilir
+     * (yanit beklenmez, gonderildi isaretlenmez; alicilar response_id ile tekrari ayiklar). Kapanista iki olay birden
+     * gelir: degismemis veri BEACON_REPEAT_MS icinde yeniden atilmaz. Donus: atilan sayisi.
+     */
+    function flushBeacon() {
+      if (!beaconImpl || sendCfg.type === 'none' || !sendCfg.url) return 0;
+      var n = 0;
+      reload();
+      sortedSessions().forEach(function (s) {
+        if (s.auto_send !== true || !sameBank(s)) return;
+        if (!needsSubmission(s, senders[s.session_id] || newSender())) return;
+        var obj = buildSubmission(s, now(), false, {});
+        var key = (s.rev || 0) + ':' + obj.responses.length + ':' + (s.sent_ids || []).length + ':' + s.status;
+        var last = beaconed[s.session_id];
+        if (last && last.key === key && now() - last.at < BEACON_REPEAT_MS) return;
+        try {
+          if (beaconImpl(sendCfg.url, JSON.stringify(obj))) {
+            n++;
+            beaconed[s.session_id] = { key: key, at: now() };
+          }
+        } catch (e) { /* en iyi caba */ }
+      });
+      return n;
+    }
+
+    /** Sekme kapandi (yuk testi): zamanlayicilar durur, yeni istek baslamaz. */
+    function close() {
+      closed = true;
+      Object.keys(senders).forEach(function (k) { clearTimer(senders[k]); });
+    }
+
+    /** Tek seferlik ses gecisi (yeniden deneme yok, onay beklemez). Donus: Promise<{total, sent, failed}>. */
+    function sendAudios(sid, o) {
+      var s = sessionBySid(sid);
+      var list = s ? pendingAudio(s) : [];
+      var fetchImpl = (o && o.fetchImpl) || defaultFetch || (root.fetch ? root.fetch.bind(root) : null);
+      var sent = 0;
+      var chain = Promise.resolve();
+      list.forEach(function (r) {
+        chain = chain.then(function () {
+          if (!audioStore || !fetchImpl) return null;
+          return Promise.resolve(audioStore.get(r.response_id)).then(function (file) {
+            if (!file || !file.data) return null;
+            return postAudio(fetchImpl, JSON.stringify(core.payload.audio({
+              study_id: s.study_id, study_key: sendCfg.study_key || null, session_id: s.session_id, response_id: r.response_id,
+              mime: file.mime || r.audio_mime, duration_ms: r.audio_duration_ms, data: file.data,
+            })), (o && o.timeoutMs) || SEND_TIMEOUT_MS);
+          });
+        }).then(function (res) {
+          if (res && res.ok) {
+            markAudioSent(sid, r.response_id);
+            sent++;
+          }
+        });
+      });
+      return chain.then(function () { return { total: list.length, sent: sent, failed: list.length - sent }; });
+    }
+
+    /**
+     * Gonderim paneli durumu: {state: 'idle'|'sending'|'waiting'|'ok'|'error', message, receipt, accepted, rejected,
+     * note, progress, waitUntil, pendingRows, pendingAudio}. 'ok' ve alici-ret sayisi depodaki kayittan turetilir.
      */
     function sendState(sid) {
-      if (sending[sid]) return { state: 'sending', rejected: 0, progress: progress[sid] || null };
+      var st = senders[sid];
       var s = sessionBySid(sid);
       var info = s ? summary(s) : null;
+      var pendingRows = s ? unsentRows(s).length : 0;
+      var pendingAud = s ? pendingAudio(s).length : 0;
+      var extra = { pendingRows: pendingRows, pendingAudio: pendingAud };
+      if (st && st.busy) return Object.assign({ state: 'sending', rejected: 0, progress: progress[sid] || null }, extra);
+      if (st && st.timer && st.timerKind === 'backoff') {
+        return Object.assign({
+          state: 'waiting', rejected: 0, waitUntil: st.waitUntil, attempt: st.attempt,
+          reason: st.lastFailure ? st.lastFailure.error || st.lastFailure.code : null,
+        }, extra);
+      }
       var rejected = info ? info.rejected : 0;
-      var last = lastSend[sid];
-      if (last && !last.ok) return { state: 'error', message: last.message, code: last.code, rejected: rejected };
+      var last = (st && st.stopped) || lastSend[sid];
+      if (last && !last.ok) return Object.assign({ state: 'error', message: last.message, code: last.code, rejected: rejected }, extra);
       if (last && last.ok && last.persisted === false) {
-        return { state: 'ok', receipt: last.receipt, accepted: last.accepted, rejected: rejected, note: T.sendPersistNote };
+        return Object.assign({ state: 'ok', receipt: last.receipt, accepted: last.accepted, rejected: rejected, note: T.sendPersistNote }, extra);
       }
-      if (s && s.sent_at && !hasNewSinceSend(s) && pendingAudio(s).length === 0) {
-        return { state: 'ok', receipt: s.receipt || null, accepted: info.acceptedCount, rejected: rejected };
+      if (s && s.sent_at && !stateDirty(s) && pendingRows === 0 && pendingAud === 0) {
+        return Object.assign({ state: 'ok', receipt: s.receipt || null, accepted: info.acceptedCount, rejected: rejected }, extra);
       }
-      return { state: 'idle', rejected: rejected };
+      return Object.assign({ state: 'idle', rejected: rejected }, extra);
     }
 
     function subscribe(fn) {
@@ -3011,6 +3511,11 @@ h2:focus {
       fileText: fileText,
       fileTextWithAudio: fileTextWithAudio,
       sendAudios: sendAudios,
+      retryNow: retryNow,
+      resumePendingSends: resumePendingSends,
+      flushNow: function (sid) { kick(sid, { now: true }); },
+      flushBeacon: flushBeacon,
+      close: close,
       fileName: function (sid) { return fileNameFor(sid, now()); },
       send: send,
       beginSend: beginSend,
@@ -3197,15 +3702,23 @@ h2:focus {
       box.appendChild(controls);
       var canSend = engine.canSend() && !o.saveOnly;
 
+      var tick = null;
       function paint() {
         var st = engine.sendState(sid);
         var info = engine.summary(sid);
         live.textContent = '';
         alertBox.textContent = '';
         controls.replaceChildren();
+        if (tick) clearTimeout(tick);
+        tick = null;
         var busy = st.state === 'sending';
+        var waiting = st.state === 'waiting';
         if (busy) {
           live.appendChild(h('p', { id: 'send-progress' }, st.progress || T.sending));
+        } else if (waiting) {
+          var left = Math.max(0, Math.ceil((st.waitUntil - Date.now()) / 1000));
+          live.appendChild(h('p', { id: 'send-waiting' }, T.sendWaiting.replace('{n}', left)));
+          tick = setTimeout(function () { if (box.isConnected) paint(); }, 1000); // geri sayim
         } else if (st.state === 'ok') {
           live.appendChild(h('p', { class: 'success' }, st.rejected > 0 ? 'Yanıtların bir kısmı gönderildi.' : T.sendOk));
           if (st.receipt) live.appendChild(h('p', { class: 'receipt' }, 'Alındı kodu: ', h('strong', {}, st.receipt)));
@@ -3213,6 +3726,12 @@ h2:focus {
           if (st.note) alertBox.appendChild(h('p', { class: 'error' }, st.note));
         } else if (st.state === 'error') {
           alertBox.appendChild(h('p', { class: 'error' }, (st.code === 'audio' ? '' : T.sendFailed) + st.message));
+        }
+        if (canSend && st.state !== 'ok' && (st.pendingRows > 0 || st.pendingAudio > 0)) {
+          var pend = h('p', { class: 'muted', id: 'send-pending' });
+          if (st.pendingRows > 0) pend.appendChild(doc.createTextNode(T.sendPendingRows.replace('{n}', st.pendingRows) + ' '));
+          if (st.pendingAudio > 0) pend.appendChild(doc.createTextNode(T.sendPendingAudio.replace('{n}', st.pendingAudio)));
+          live.appendChild(pend);
         }
         if (!busy && st.rejected > 0) {
           alertBox.appendChild(h('p', { class: 'error' }, st.rejected + ' yanıt alıcı tarafından kabul edilmedi. Lütfen "Dosyaya kaydet" ile bir kopya alıp araştırmacıya ilet.'));
@@ -3223,9 +3742,13 @@ h2:focus {
         }
 
         if (canSend && !(info && info.legacyBank)) {
-          var label = st.state === 'error' ? T.sendRetry : (st.state === 'ok' ? T.sendAgain : (o.partial ? T.sendPartial : T.send));
-          var kind = st.state === 'ok' ? 'outline' : (o.compact ? 'outline' : 'primary');
-          controls.appendChild(button(busy ? T.sending : label, kind, doSend, { disabled: busy, 'aria-busy': busy ? 'true' : null }));
+          if (waiting) {
+            controls.appendChild(button(T.sendRetryNow, 'primary', function () { engine.retryNow(sid); }, { id: 'send-retry-now' }));
+          } else {
+            var label = st.state === 'error' ? T.sendRetry : (st.state === 'ok' ? T.sendAgain : (o.partial ? T.sendPartial : T.send));
+            var kind = st.state === 'ok' ? 'outline' : (o.compact ? 'outline' : 'primary');
+            controls.appendChild(button(busy ? T.sending : label, kind, doSend, { disabled: busy, 'aria-busy': busy ? 'true' : null }));
+          }
         }
         controls.appendChild(button(T.saveFile, canSend ? 'outline' : 'primary', doSave, { disabled: busy }));
       }
@@ -3296,11 +3819,19 @@ h2:focus {
       engine.reload();
       var resumable = engine.resumable();
       var storageOk = engine.storageAvailable();
-      var main = h('main', { class: 'screen' });
+      var main = h('main', { class: 'screen screen-start' });
       main.appendChild(h('h1', { class: 'title' }, T.appName));
-      main.appendChild(h('p', { class: 'lead' }, T.startSubtitle));
-      main.appendChild(h('p', { class: 'note' }, engine.canSend() ? T.startLocalInfo : T.startLocalInfoNone));
-      main.appendChild(h('p', { class: 'note', id: 'privacy-note' }, T.startPrivacyNote));
+      main.appendChild(h('p', { class: 'lead', id: 'start-subtitle' }, T.startSubtitle));
+      main.appendChild(h('section', { class: 'card', id: 'assistant-card', 'aria-labelledby': 'assistant-card-title' },
+        h('h2', { class: 'card-title', id: 'assistant-card-title' }, T.startWhatTitle),
+        h('p', {}, T.startWhatLead),
+        h('ul', { class: 'what-list' }, T.startWhat.map(function (t) { return h('li', {}, t); }))));
+      main.appendChild(h('p', { id: 'start-end-question' }, T.startEndQuestion));
+      main.appendChild(h('p', { class: 'meta', id: 'start-meta' }, T.startMeta.replace('{n}', engine.plannedTotal())));
+      var notes = [
+        h('p', { class: 'note', id: 'local-note' }, engine.canSend() ? T.startLocalInfo : T.startLocalInfoNone),
+        h('p', { class: 'note', id: 'privacy-note' }, engine.canSend() ? T.startPrivacyNote : T.startPrivacyNoteNone),
+      ];
       if (startNotice) {
         main.appendChild(h('div', { class: 'banner banner-info', role: 'status', id: 'send-notice' },
           h('p', { class: 'success' }, startNotice.rejected > 0 ? 'Yanıtların bir kısmı gönderildi.' : T.sendOk),
@@ -3310,6 +3841,21 @@ h2:focus {
       if (!storageOk) {
         main.appendChild(h('p', { class: 'banner banner-error', role: 'alert' }, T.storageUnavailable));
       }
+      if (storageOk) {
+        var primary = resumable[0];
+        if (!primary) {
+          main.appendChild(button(T.startBegin, 'primary', function () { renderConsent(); }, { id: 'start-button' }));
+        } else {
+          main.appendChild(button(T.startResume, 'primary', function () { resume(primary.sessionId); }, { id: 'resume-button' }));
+          main.appendChild(h('p', { class: 'resume-info' }, 'Soru ' + primary.questionNumber + '/' + primary.total + ' · ' + formatShortDateTime(primary.lastActiveAt)));
+          main.appendChild(button(T.startNew, 'outline', function () {
+            confirmDialog({ title: T.startNewTitle, text: T.startNewText, confirmLabel: T.startNewConfirm }).then(function (yes) {
+              if (yes) renderConsent();
+            });
+          }, { id: 'new-survey-button' }));
+        }
+      }
+
       append(main, recoveryBanner());
 
       // baska soru havuzu surumuyle baslamis oturumlar: yalniz dosyaya kaydedilebilir
@@ -3336,20 +3882,8 @@ h2:focus {
           sendPanel(s.sessionId, {})));
       });
 
-      if (storageOk) {
-        var primary = resumable[0];
-        if (!primary) {
-          main.appendChild(button(T.startBegin, 'primary', function () { renderConsent(); }, { id: 'start-button' }));
-        } else {
-          main.appendChild(button(T.startResume, 'primary', function () { resume(primary.sessionId); }, { id: 'resume-button' }));
-          main.appendChild(h('p', { class: 'resume-info' }, 'Soru ' + primary.questionNumber + '/' + primary.total + ' · ' + formatShortDateTime(primary.lastActiveAt)));
-          main.appendChild(button(T.startNew, 'outline', function () {
-            confirmDialog({ title: T.startNewTitle, text: T.startNewText, confirmLabel: T.startNewConfirm }).then(function (yes) {
-              if (yes) renderConsent();
-            });
-          }, { id: 'new-survey-button' }));
-        }
-      }
+      // depolama notlari eylem dugmelerinden sonra (mobilde dugme ilk ekranda kalsin)
+      notes.forEach(function (n) { main.appendChild(n); });
 
       if (resumable.length > 1) {
         main.appendChild(h('h2', { class: 'section-title' }, T.startSessions));
@@ -3471,14 +4005,22 @@ h2:focus {
       screen = 'howto';
       var main = h('main', { class: 'screen' });
       main.appendChild(h('h1', { class: 'title' }, T.howToTitle));
-      T.howToText.forEach(function (t) { main.appendChild(h('p', {}, t)); });
-      var info = engine.summary(sid);
-      if (info && info.audioConsent && audioAvailable()) main.appendChild(h('p', { id: 'howto-audio' }, T.howToAudio));
-      main.appendChild(h('section', { class: 'card example', id: 'howto-example', 'aria-labelledby': 'howto-example-title' },
-        h('h2', { class: 'card-title', id: 'howto-example-title' }, T.howToExampleTitle),
-        h('ol', { class: 'example-list' }, T.howToExample.map(function (t) { return h('li', {}, t); })),
+      main.appendChild(h('ol', { class: 'steps', id: 'howto-steps' }, T.howToSteps.map(function (t) { return h('li', {}, t); })));
+      // ornek: kucuk bir soru ekrani gibi; kutular etkilesimsiz (ekran okuyucuya metin karsiligi verilir)
+      var alt = T.howToExampleLabel + ': ' + T.howToExampleQuestion + ' Örnek cevaplar: ' +
+        T.howToExample.map(function (t, i) { return (i + 1) + '. ' + t; }).join(', ') + '.';
+      main.appendChild(h('section', { class: 'card example-q', id: 'howto-example', 'aria-label': T.howToExampleLabel },
+        h('p', { class: 'example-badge', 'aria-hidden': 'true' }, T.howToExampleLabel),
+        h('p', { class: 'prompt example-prompt', 'aria-hidden': 'true' }, T.howToExampleQuestion),
+        h('div', { class: 'example-answers', 'aria-hidden': 'true' }, T.howToExample.map(function (t, i) {
+          return h('div', { class: 'answer-row' }, h('span', { class: 'answer-no' }, (i + 1) + '.'), h('div', { class: 'field example-field' }, t));
+        })),
+        h('p', { class: 'sr-only', id: 'howto-example-alt' }, alt),
         h('p', { class: 'muted' }, T.howToExampleNote)));
-      main.appendChild(h('p', { class: 'note' }, T.howToNote));
+      var info = engine.summary(sid);
+      var tips = T.howToTips.slice();
+      if (info && info.audioConsent && audioAvailable()) tips.push(T.howToAudioTip);
+      main.appendChild(h('ul', { class: 'tips', id: 'howto-tips' }, tips.map(function (t) { return h('li', {}, t); })));
       main.appendChild(h('div', { class: 'actions' },
         button(T.howToStart, 'primary', function () { renderQuestion(sid); }, { id: 'howto-start' })));
       show(T.howToTitle, main);
@@ -3853,6 +4395,7 @@ h2:focus {
         main.appendChild(h('p', { class: 'lead', id: 'completed-counts' }, completedText(info)));
         main.appendChild(h('p', { class: 'note' }, engine.canSend() ? T.completedSendInfo : T.sendNoneInfo));
         main.appendChild(sendPanel(sid, {}));
+        engine.flushNow(sid); // anket sonu: kalanlar ve oneriler aralik beklemeden
       }
       main.appendChild(button(T.completedHome, 'outline', function () { renderStart(); }, { id: 'home-button' }));
       show(T.completedTitle, main);
@@ -3890,10 +4433,25 @@ h2:focus {
     try { audioStore = root.indexedDB ? createAudioStore(root.indexedDB) : null; } catch (e) { audioStore = null; }
     engine = createEngine({
       core: core, bank: bank, config: config, storage: storage, bankChecksum: config.bank_checksum, audioStore: audioStore,
+      autoSend: true, // kaydettikce gonderim (kullanici karari 16 Ekim)
+      beacon: function (url, text) {
+        var nav = root.navigator;
+        if (!nav || typeof nav.sendBeacon !== 'function') return false;
+        return Boolean(nav.sendBeacon(url, new Blob([text], { type: 'text/plain;charset=utf-8' })));
+      },
     });
     engine.subscribe(onSendChange);
+    // sayfa kapanirken ya da sekme gizlenince gonderilmemisler sendBeacon ile (yanit beklenmez; tekrar zararsiz)
+    root.addEventListener('pagehide', function () { engine.flushBeacon(); });
+    doc.addEventListener('visibilitychange', function () {
+      if (doc.visibilityState === 'hidden') engine.flushBeacon();
+    });
     requestPersistence(root.navigator); // en iyi caba: tarayici depoyu kalici isaretlerse otomatik temizlenmez
-    renderStart();
+    // acilista gonderilmemis veri kendiliginden gider; tamamlanmis anket bekliyorsa son ekran (durumu gorunsun)
+    var resumed = engine.resumePendingSends();
+    var finished = resumed.map(function (id) { return engine.summary(id); }).filter(function (x) { return x && x.status === 'completed'; })[0];
+    if (finished) renderCompleted(finished.sessionId);
+    else renderStart();
   }
 
   var api = {
