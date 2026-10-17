@@ -4941,7 +4941,7 @@ h2:focus {
 (function (root) {
   'use strict';
 
-  var APP_VERSION = 'web-3.1.1'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: katilimci kodu yerine ad (§8); 3.1.1: onay ekrani dort madde (§9)
+  var APP_VERSION = 'web-3.1.2'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: ad (§8); 3.1.1: onay ekrani (§9); 3.1.2: eski surum kartlari yok (§10)
   var PAYLOAD_FORMAT = 'sesli-asistan-anket/v1'; // Tasarim 2.0'da alanlar eklendi, ad ayni (TASARIM-v2 §6)
   var AUDIO_FORMAT = 'sesli-asistan-anket/audio-v1'; // ses dosyasi gonderisi (TASARIM-v2 §8.1)
   var AUDIO_MAX_BYTES = 1024 * 1024; // cozulmus ses dosyasi siniri
@@ -5937,8 +5937,6 @@ h2:focus {
     abandonedText: 'Bıraktığın bir anketin yanıtları henüz araştırmacıya gönderilmedi.',
     finishedTitle: 'Tamamlanan anket',
     finishedText: 'Yanıtların yalnızca bu tarayıcıda duruyor. Araştırmacıya iletmek için "Dosyaya kaydet"i kullan.',
-    legacyTitle: 'Eski sürüm anket',
-    legacyText: 'Bu anket başka bir soru havuzu sürümüyle başlatılmış; sürdürülemez ve gönderilemez. Yanıtlarını "Dosyaya kaydet" ile bir dosyaya kaydedip araştırmacıya kendin iletebilirsin.',
     consentTitle: 'Bilgilendirme ve onay',
     consentNameLabel: 'Adın (isteğe bağlı)',
     consentNameHint: 'Yazarsan yanıtlarınla birlikte araştırmacıya iletilir; istemezsen boş bırakabilirsin.',
@@ -8126,7 +8124,7 @@ h2:focus {
       box.appendChild(live);
       box.appendChild(alertBox);
       box.appendChild(controls);
-      var canSend = engine.canSend() && !o.saveOnly;
+      var canSend = engine.canSend();
 
       var tick = null;
       function paint() {
@@ -8285,14 +8283,8 @@ h2:focus {
 
       append(main, recoveryBanner());
 
-      // baska soru havuzu surumuyle baslamis oturumlar: yalniz dosyaya kaydedilebilir
-      engine.legacySessions().forEach(function (s) {
-        main.appendChild(h('section', { class: 'card card-warn', 'aria-labelledby': 'legacy-' + s.sessionId },
-          h('h2', { id: 'legacy-' + s.sessionId, class: 'card-title' }, T.legacyTitle),
-          h('p', {}, T.legacyText),
-          h('p', { class: 'muted' }, (s.kind === 'oos' ? T.kindOos : T.kindMain) + ' · ' + countText(s) + ' · Son işlem: ' + formatShortDateTime(s.lastActiveAt)),
-          sendPanel(s.sessionId, { saveOnly: true })));
-      });
+      // Baska soru havuzu surumuyle baslamis oturumlar (engine.legacySessions) gosterilmez (kullanici istegi 17 Ekim;
+      // TASARIM-v3 §10): gonderilen yanitlari alicida, gonderilmeyenler bu tarayicinin deposunda kalir (silinmez).
 
       // tamamlanan ve birakilan oturumlar: gonderim varsa yalniz gonderilmemisler, yoksa hepsi (dosyaya kaydedilebilsin)
       var canSend = engine.canSend();
