@@ -4941,7 +4941,7 @@ h2:focus {
 (function (root) {
   'use strict';
 
-  var APP_VERSION = 'web-3.1.2'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: ad (§8); 3.1.1: onay ekrani (§9); 3.1.2: eski surum kartlari yok (§10)
+  var APP_VERSION = 'web-3.2.0'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: ad (§8); 3.1.1: onay (§9); 3.1.2: eski kartlar yok (§10); 3.2: dengeli secim (§11)
   var PAYLOAD_FORMAT = 'sesli-asistan-anket/v1'; // Tasarim 2.0'da alanlar eklendi, ad ayni (TASARIM-v2 §6)
   var AUDIO_FORMAT = 'sesli-asistan-anket/audio-v1'; // ses dosyasi gonderisi (TASARIM-v2 §8.1)
   var AUDIO_MAX_BYTES = 1024 * 1024; // cozulmus ses dosyasi siniri
@@ -5885,6 +5885,7 @@ h2:focus {
   var STORE_PREFIX = 'sesli-anket/v2/';
   var QUARANTINE_PREFIX = 'sesli-anket/v2q/';
   var SEND_TIMEOUT_MS = 60000;
+  var COUNTS_TIMEOUT_MS = 8000; // dengeli secim icin soru sayilari (arka planda; gelmezse rastgele secim)
   var MAX_ANSWER_LENGTH = 2000;
   var MAX_NAME_LENGTH = 60; // katilimcinin adi (TASARIM-v3 §8); alicilar 200 karaktere kadar kabul eder
   var ANSWERS_PER_QUESTION = 3; // soru ekraninda birlikte gosterilen alan sayisi (TASARIM-v2 §2, AnswerRules.MAX_ANSWERS)
@@ -6455,6 +6456,9 @@ h2:focus {
     var progress = Object.create(null); // oturum -> ses gonderim ilerleme metni
     var beaconed = Object.create(null); // oturum -> {key, at}: son beacon (kapanista iki olay ayni veriyi iki kez atmasin)
     var lastSend = Object.create(null); // oturum -> son gonderim sonucu (bellekte)
+    // dengeli secim (TASARIM-v3 §11): alicinin soru sayilari {counts, issuedAt, at} ya da null; ucustaki istek
+    var remoteCounts = null;
+    var countsInflight = null;
     var listeners = [];
 
     function emptyStore() {
@@ -6813,6 +6817,76 @@ h2:focus {
       return bank.candidatesFor('main', issued, seen);
     }
 
+    // ------------------------------------------------------------ dengeli secim (TASARIM-v3 §11)
+
+    /**
+     * Secimde kullanilan gosterim sayilari: alicinin soru sayilari geldiyse onlar + sayilar alindiktan sonra bu
+     * tarayicida baslatilan oturumlarin sorulari (ayni tarayicida arka arkaya baslayan iki kisi ayni sorulari almasin);
+     * gelmediyse yalniz bu tarayicinin sayilari (onceki davranis: yeni tarayicida tamamen rastgele).
+     */
+    function planIssued() {
+      if (!remoteCounts) return data.issued;
+      var out = Object.assign({}, remoteCounts.counts);
+      Object.keys(data.issued).forEach(function (q) {
+        var since = data.issued[q] - (remoteCounts.issuedAt[q] || 0);
+        if (since > 0) out[q] = (out[q] || 0) + since;
+      });
+      return out;
+    }
+
+    /** Alicinin soru sayilari yaniti: tur, calisma ve banka tutmali; yalniz bankadaki sorular, negatif olmayan tam sayi. */
+    function validCounts(reply) {
+      if (!isPlainObject(reply) || reply.kind !== 'question_counts' || reply.study_id !== studyId ||
+          reply.bank_version !== bank.bankVersion || !isPlainObject(reply.counts)) return null;
+      var out = {};
+      Object.keys(reply.counts).forEach(function (q) {
+        var n = reply.counts[q];
+        if (bank.question(q) && isInt(n) && n >= 0) out[q] = n;
+      });
+      return out;
+    }
+
+    /**
+     * Alicidan (yalniz Apps Script: GET ?op=counts) soru sayilarini ister. Arka planda calisir, kimseyi bekletmez;
+     * basarisiz, gec ya da sozlesme disi yanitta eldeki sayilar (yoksa rastgele secim) kalir. Donus: Promise<bool>.
+     */
+    function refreshCounts(o) {
+      if (sendCfg.type !== 'apps_script' || !sendCfg.url) return Promise.resolve(false);
+      if (countsInflight) return countsInflight;
+      var fetchImpl = (o && o.fetchImpl) || defaultFetch || (root.fetch ? root.fetch.bind(root) : null);
+      if (!fetchImpl) return Promise.resolve(false);
+      var controller = typeof AbortController === 'function' ? new AbortController() : null;
+      var timer = null;
+      var timeout = new Promise(function (resolve) {
+        timer = timers.setTimeout(function () {
+          if (controller) controller.abort();
+          resolve(null);
+        }, (o && o.timeoutMs) || COUNTS_TIMEOUT_MS);
+      });
+      var url = sendCfg.url + (sendCfg.url.indexOf('?') >= 0 ? '&' : '?') + 'op=counts';
+      var request = Promise.resolve().then(function () {
+        return fetchImpl(url, {
+          method: 'GET', credentials: 'omit', referrerPolicy: 'no-referrer', signal: controller ? controller.signal : undefined,
+        });
+      }).then(function (res) {
+        if (!res || !res.ok) return null;
+        return Promise.resolve(res.text()).then(function (t) { return validCounts(JSON.parse(t)); });
+      }).then(null, function () { return null; }); // ag hatasi, okunamayan govde, JSON degil: sayi yok
+      countsInflight = Promise.race([request, timeout]).then(function (counts) {
+        timers.clearTimeout(timer);
+        countsInflight = null;
+        if (!counts) return false;
+        try {
+          reload();
+          remoteCounts = { counts: counts, issuedAt: Object.assign({}, data.issued), at: now() };
+          return true;
+        } catch (e) {
+          return false;
+        }
+      });
+      return countsInflight;
+    }
+
     /** Grup (fonksiyon) sayisi: etkin sorusu olan fonksiyonlar (TASARIM-v2 §1, 86). */
     function groupCount(cands) {
       return new Set(cands.map(function (c) { return c.group; })).size;
@@ -6900,7 +6974,7 @@ h2:focus {
       if (prev) (prev.selected_question_ids || []).forEach(function (qid) { seen.add(qid); });
       var plan;
       try {
-        var cands = mainCandidates(data.issued, seen);
+        var cands = mainCandidates(planIssued(), seen);
         var size = sessionSize(groupCount(cands));
         if (prev) size = Math.min(size, unseenGroupCount(cands));
         plan = core.selection.planMixed(size, 0, cands, rng || undefined);
@@ -7904,6 +7978,8 @@ h2:focus {
       },
       summary: function (sid) { var s = sessionBySid(sid); return s ? summary(s) : null; },
       plannedTotal: plannedTotal,
+      refreshCounts: refreshCounts,
+      countsReady: function () { return remoteCounts !== null; },
       startSession: startSession,
       canExtend: canExtend,
       extend: extend,
@@ -8358,6 +8434,7 @@ h2:focus {
 
     function renderConsent() {
       screen = 'consent';
+      engine.refreshCounts(); // oturum en guncel sayilarla secilsin (beklemez)
       startNotice = null;
       var total = engine.plannedTotal();
       var main = h('main', { class: 'screen' });
@@ -8806,6 +8883,7 @@ h2:focus {
      */
     function renderMore(sid) {
       screen = 'more';
+      engine.refreshCounts(); // yeni blok en guncel sayilarla secilsin (beklemez)
       var info = engine.summary(sid);
       var done = info ? info.total : 0;
       var next = engine.plannedTotal();
@@ -8945,6 +9023,7 @@ h2:focus {
       if (doc.visibilityState === 'hidden') engine.flushBeacon();
     });
     requestPersistence(root.navigator); // en iyi caba: tarayici depoyu kalici isaretlerse otomatik temizlenmez
+    engine.refreshCounts(); // dengeli secim (TASARIM-v3 §11): arka planda; onay ve "bir blok daha" ekraninda yenilenir
     // acilista gonderilmemis veri kendiliginden gider; tamamlanmis anket bekliyorsa son ekran (durumu gorunsun)
     var resumed = engine.resumePendingSends();
     var finished = resumed.map(function (id) { return engine.summary(id); }).filter(function (x) { return x && x.status === 'completed'; })[0];
