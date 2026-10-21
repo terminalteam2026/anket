@@ -4941,7 +4941,7 @@ h2:focus {
 (function (root) {
   'use strict';
 
-  var APP_VERSION = 'web-3.2.0'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: ad (§8); 3.1.1: onay (§9); 3.1.2: eski kartlar yok (§10); 3.2: dengeli secim (§11)
+  var APP_VERSION = 'web-3.2.1'; // Tasarim 3.0 (docs/TASARIM-v3.md); 3.1: ad (§8); 3.1.1: onay (§9); 3.1.2: eski kartlar yok (§10); 3.2: dengeli secim (§11); 3.2.1: ses deposu metin + bellek (§12)
   var PAYLOAD_FORMAT = 'sesli-asistan-anket/v1'; // Tasarim 2.0'da alanlar eklendi, ad ayni (TASARIM-v2 §6)
   var AUDIO_FORMAT = 'sesli-asistan-anket/audio-v1'; // ses dosyasi gonderisi (TASARIM-v2 §8.1)
   var AUDIO_MAX_BYTES = 1024 * 1024; // cozulmus ses dosyasi siniri
@@ -6134,9 +6134,18 @@ h2:focus {
    * Ses kayitlari deposu (TASARIM-v2 §8: localStorage'a sigmaz): IndexedDB 'sesli-anket-ses', anahtar response_id.
    * put(id, {blob, mime, duration_ms, session_id}), get(id) -> {mime, duration_ms, data(base64)} | null, remove(id).
    */
+  /**
+   * Ses kayitlari deposu (IndexedDB 'sesli-anket-ses', anahtar = yanitin response_id'si). Kayit METIN (base64) olarak
+   * yazilir: Safari'nin gizli sekmesi ve uygulama ici tarayicilar (WhatsApp, Instagram...) IndexedDB'ye Blob yazimini
+   * reddediyor; sesli cevap "Kaydedilemedi" ile takiliyordu (21 Ekim). IndexedDB hic acilamaz ya da yazamazsa kayit bu
+   * sayfa acik kaldigi surece bellekte tutulur ve oradan gonderilir; cevap hicbir durumda ses deposu yuzunden engellenmez.
+   * idb null olabilir (IndexedDB yok): yalniz bellek.
+   */
   function createAudioStore(idb) {
     var opened = null;
+    var memory = new Map(); // IndexedDB'ye yazilamayan kayitlar: {data, mime, duration_ms, session_id}
     function db() {
+      if (!idb) return Promise.reject(new Error('IndexedDB yok'));
       if (!opened) {
         opened = new Promise(function (resolve, reject) {
           var req = idb.open('sesli-anket-ses', 1);
@@ -6144,6 +6153,7 @@ h2:focus {
           req.onsuccess = function () { resolve(req.result); };
           req.onerror = function () { reject(req.error); };
         });
+        opened.then(null, function () { opened = null; }); // acilamadiysa sonraki istek yeniden dener
       }
       return opened;
     }
@@ -6159,6 +6169,14 @@ h2:focus {
       });
     }
     function toBase64(blob) {
+      if (blob && typeof blob.arrayBuffer === 'function' && typeof btoa === 'function') {
+        return blob.arrayBuffer().then(function (buf) {
+          var bytes = new Uint8Array(buf);
+          var parts = [];
+          for (var i = 0; i < bytes.length; i += 0x8000) parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)));
+          return btoa(parts.join(''));
+        });
+      }
       return new Promise(function (resolve, reject) {
         var r = new FileReader();
         r.onload = function () { resolve(String(r.result).replace(/^data:[^,]*,/, '')); };
@@ -6166,15 +6184,36 @@ h2:focus {
         r.readAsDataURL(blob);
       });
     }
+    function plain(rec, data) {
+      return { mime: rec.mime, duration_ms: rec.duration_ms, data: data };
+    }
     return {
-      put: function (id, rec) { return tx('readwrite', function (st) { return st.put(rec, id); }); },
-      remove: function (id) { return tx('readwrite', function (st) { return st.delete(id); }); },
-      getRecord: function (id) { return tx('readonly', function (st) { return st.get(id); }); },
-      get: function (id) {
-        return this.getRecord(id).then(function (rec) {
-          if (!rec || !rec.blob) return null;
-          return toBase64(rec.blob).then(function (data) { return { mime: rec.mime, duration_ms: rec.duration_ms, data: data }; });
+      /** rec: {blob | data, mime, duration_ms, session_id}. IndexedDB yazamazsa bellege yazar; ikisi de olmazsa (ses
+       *  okunamadi) reddeder. */
+      put: function (id, rec) {
+        return Promise.resolve(rec.blob ? toBase64(rec.blob) : rec.data).then(function (data) {
+          if (typeof data !== 'string') throw new Error('ses verisi yok');
+          var stored = { data: data, mime: rec.mime, duration_ms: rec.duration_ms, session_id: rec.session_id };
+          return tx('readwrite', function (st) { return st.put(stored, id); }).then(function () {
+            memory.delete(id);
+          }, function () {
+            memory.set(id, stored);
+          });
         });
+      },
+      remove: function (id) {
+        memory.delete(id);
+        return tx('readwrite', function (st) { return st.delete(id); });
+      },
+      /** Promise<{mime, duration_ms, data(base64)} | null>; eski surumun Blob'lu kayitlari da okunur. */
+      get: function (id) {
+        if (memory.has(id)) return Promise.resolve(plain(memory.get(id), memory.get(id).data));
+        return tx('readonly', function (st) { return st.get(id); }).then(function (rec) {
+          if (!rec) return null;
+          if (typeof rec.data === 'string') return plain(rec, rec.data);
+          if (rec.blob) return toBase64(rec.blob).then(function (data) { return plain(rec, data); });
+          return null;
+        }, function () { return null; });
       },
     };
   }
@@ -9006,7 +9045,8 @@ h2:focus {
     }
     var storage = null;
     try { storage = root.localStorage; } catch (e) { storage = null; }
-    try { audioStore = root.indexedDB ? createAudioStore(root.indexedDB) : null; } catch (e) { audioStore = null; }
+    // IndexedDB yoksa da ses deposu bellekte calisir (kayit bu sayfa acikken gonderilir)
+    try { audioStore = createAudioStore(root.indexedDB || null); } catch (e) { audioStore = createAudioStore(null); }
     engine = createEngine({
       core: core, bank: bank, config: config, storage: storage, bankChecksum: config.bank_checksum, audioStore: audioStore,
       autoSend: true, // kaydettikce gonderim (kullanici karari 16 Ekim)
